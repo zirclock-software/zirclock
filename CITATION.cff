@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use ZirClock in published work, please cite it as below. A formal citation will be added upon publication."
+title: "ZirClock: zircon petrochronology"
+type: software
+authors:
+  - family-names: "Espejo Bautista"
+    given-names: "Guillermo"
+    orcid: "https://orcid.org/0000-0001-9206-5108"
+version: "3.0"
+date-released: "2026-10-19"
+license: GPL-3.0-or-later
+repository-code: "https://github.com/zirclock-software/zirclock"
+keywords:
+  - zircon
+  - petrochronology
+  - U-Pb geochronology
+  - Lu-Hf isotopes
+  - Ti-in-zircon thermometry
+  - trace elements
+  - detrital geochronology

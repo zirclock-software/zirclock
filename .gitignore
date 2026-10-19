@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Build output (PyInstaller / Inno Setup / build_mac.sh)
+build/
+dist/
+ZirClock.app/
+packaging/zirclock.icns
+packaging/zirclock.ico
+
+# Operating-system clutter
+.DS_Store
+Thumbs.db
+~$*
+
+# Project files hold research data: keep them out of the repository unless you
+# mean to share them.
+*.zirclock
+*.chronikon
+*.zirchron

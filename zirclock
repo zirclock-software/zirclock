@@ -1,0 +1,79 @@
+#!/bin/zsh
+# Lanzador de ZirClock para macOS (§31 / fix Liquid Glass, 2026-07-07).
+#
+# POR QUÉ EXISTE: el Python de Homebrew está compilado contra el SDK de
+# macOS 26, así que cualquier proceso GUI de Python corre con el rediseño
+# "Liquid Glass" activado, y Qt 6.11 tiene artefactos de dibujado bajo ese
+# modo (QTBUG-138942) — los tooltips salían translúcidos/ilegibles. El
+# opt-out oficial de Apple es la clave UIDesignRequiresCompatibility en el
+# Info.plist del EJECUTABLE del proceso, y un `python main.py` pelón no
+# tiene bundle. Este script construye (una vez) un ZirClock.app local con:
+#   - una COPIA del intérprete real del framework (el binario interno de
+#     Python.app, que es el proceso final — el bin/pythonX.Y es un stub
+#     que re-ejecuta a ese),
+#   - un Info.plist con UIDesignRequiresCompatibility = YES,
+# y lo lanza con __PYVENV_LAUNCHER__ apuntando al python del venv (el
+# mismo mecanismo que usa el stub oficial para resolver venvs).
+#
+# ZirClock.app está en .gitignore: es específico de esta máquina (copia
+# binaria + rutas locales). Si Homebrew actualiza Python, el script
+# detecta el binario más nuevo y regenera la copia solo.
+#
+# Uso:  ./zirclock        (en Windows se sigue usando: python main.py)
+set -e
+
+DIR="${0:A:h}"
+VENV_PY="$DIR/.venv/bin/python"
+APP="$DIR/ZirClock.app"
+BIN="$APP/Contents/MacOS/ZirClock"
+
+if [[ "$(uname)" != "Darwin" ]]; then
+    echo "Este lanzador es solo para macOS; en Windows usa: python main.py" >&2
+    exit 1
+fi
+if [[ ! -x "$VENV_PY" ]]; then
+    echo "No encuentro $VENV_PY — crea el venv primero (python3 -m venv .venv" \
+         "&& .venv/bin/pip install -r requirements.txt)" >&2
+    exit 1
+fi
+
+# Binario REAL del intérprete: bin/pythonX.Y del framework es un stub;
+# el proceso final es Resources/Python.app/Contents/MacOS/Python.
+REAL_PY="$(readlink -f "$VENV_PY")"
+FW_BIN="${REAL_PY:h:h}/Resources/Python.app/Contents/MacOS/Python"
+if [[ ! -x "$FW_BIN" ]]; then
+    # Build no-framework (p.ej. algunos Python de uv/pyenv): no hay stub ni
+    # re-exec, el propio binario es el proceso final.
+    FW_BIN="$REAL_PY"
+fi
+
+# (Re)generar el bundle si no existe o si el intérprete es más nuevo
+# (actualización de Homebrew).
+if [[ ! -x "$BIN" || "$FW_BIN" -nt "$BIN" ]]; then
+    mkdir -p "$APP/Contents/MacOS"
+    cp -f "$FW_BIN" "$BIN"
+    cat > "$APP/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleExecutable</key>
+	<string>ZirClock</string>
+	<key>CFBundleIdentifier</key>
+	<string>mx.zirclock.app</string>
+	<key>CFBundleName</key>
+	<string>ZirClock</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>UIDesignRequiresCompatibility</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+</dict>
+</plist>
+PLIST
+    echo "ZirClock.app (re)generado."
+fi
+
+export __PYVENV_LAUNCHER__="$VENV_PY"
+exec "$BIN" "$DIR/main.py" "$@"
