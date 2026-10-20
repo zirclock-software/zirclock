@@ -12195,13 +12195,21 @@ def _app_settings():
     if not _SETTINGS_MIGRATED:
         _SETTINGS_MIGRATED = True
         try:
+            # ⚠ macOS: con los "fallbacks" de QSettings (encendidos por
+            # omisión) allKeys() incluye también las preferencias GLOBALES del
+            # sistema (NSGlobalDomain: idioma, trackpad… ~70 claves) → el
+            # ámbito nuevo nunca parecía vacío y la copia no corría (y si
+            # corriera, las copiaría). Se miran SOLO las claves propias.
+            st.setFallbacksEnabled(False)
             if not st.allKeys():
                 old = (QSettings(_t + "_Chronikon", "Chronikon") if _t
                        else QSettings("Chronikon", "Chronikon"))
+                old.setFallbacksEnabled(False)
                 for k in old.allKeys():
                     st.setValue(k, old.value(k))
         except Exception:
             pass
+        st.setFallbacksEnabled(True)
     return st
 
 

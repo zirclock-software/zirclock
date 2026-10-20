@@ -38,12 +38,8 @@ system:
 | System | Download |
 |---|---|
 | **Windows** 10 / 11 (64-bit) | `ZirClock-3.0-windows-setup.exe` |
-| **macOS** 14+, Apple Silicon | `ZirClock-3.0-arm64.dmg` *(coming shortly)* |
-| **macOS** 13+, Intel | `ZirClock-3.0-intel.dmg` *(coming shortly)* |
-
-The macOS builds of 3.0 are on their way and will be added to the same
-release. In the meantime ZirClock also runs from source on a Mac (see
-[Running from source](#running-from-source)).
+| **macOS** 14+, Apple Silicon | `ZirClock-3.0-arm64.dmg` |
+| **macOS** 13+, Intel | `ZirClock-3.0-intel.dmg` |
 
 Step-by-step instructions for both systems, including the one-time security
 prompts and troubleshooting, are in [INSTALL.md](INSTALL.md).
