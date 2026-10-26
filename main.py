@@ -469,6 +469,42 @@ _P5_ICON_BTN_QSS = f"""
     }}
 """
 
+# M11 (2026-10-25, Guillermo): un rótulo chico bajo cada ícono de la barra de
+# Panel 5 y de las de las tablas. UNA bandera para toda la app: View ▸ Show
+# button labels, guardada en las preferencias de la APP (no del proyecto).
+_P5_BTN_LABELS = {"on": True}
+
+
+def _icon_label_pixmap(key, text, alpha=1.0, min_w=0, dpr=2.0):
+    """El ícono `key` (18 px) con `text` debajo, en UNA sola imagen (letra de
+    9 px gris). Así el botón sigue siendo el mismo QPushButton o la misma
+    acción de la barra de matplotlib — nada que los busque por su tipo o por
+    su texto cambia —, y Qt atenúa el rótulo junto con el ícono cuando el
+    botón está deshabilitado."""
+    from PyQt6.QtGui import QFontMetrics
+    f = QFont()
+    f.setPixelSize(9)
+    fm = QFontMetrics(f)
+    w = max(18, fm.horizontalAdvance(text) + 2, int(min_w))
+    h = 19 + fm.height()
+    pm = QPixmap(int(w * dpr), int(h * dpr))
+    pm.setDevicePixelRatio(dpr)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+    p.drawPixmap(QPointF((w - 18) / 2.0, 0.0),
+                 _rail_icon_pixmap(key, 18, alpha=alpha))
+    p.setFont(f)
+    c = QColor(THEME["text2"])
+    c.setAlphaF(max(0.0, min(1.0, float(alpha))))
+    p.setPen(c)
+    p.drawText(QRectF(0, 19, w, fm.height()),
+               int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop),
+               text)
+    p.end()
+    return pm
+
 
 class _P5ArtistGroup:
     """Varios artistas transitorios que se retiran juntos con `.remove()`
@@ -1570,6 +1606,17 @@ class _ComposeArrowDialog(QDialog):
         super().accept()
 
 
+# 2026-10-24 (M3): estilos de trazo de las anotaciones de Panel 5 (código de
+# matplotlib, rótulo). Una anotación sin la clave "ls" es sólida, como antes.
+_P5_LINE_STYLES = (("solid", "Solid"), ("dashed", "Dashed"),
+                   ("dotted", "Dotted"), ("dashdot", "Dash-dot"))
+
+
+def _p5_line_style(a):
+    ls = str((a or {}).get("ls", "solid"))
+    return ls if ls in dict(_P5_LINE_STYLES) else "solid"
+
+
 class _P5LineDialog(QDialog):
     """§59: estilo de una línea/flecha MANUAL de un gráfico de Panel 5 — con o sin
     flecha, color, grosor y tamaño de la punta. T18: generalizado a FORMAS
@@ -1637,6 +1684,19 @@ class _P5LineDialog(QDialog):
             row.addWidget(QLabel("°"))
         row.addStretch(1)
         lay.addLayout(row)
+
+        # 2026-10-24 (M3, Guillermo): sólida, guiones, puntos…
+        srow = QHBoxLayout(); srow.setSpacing(8)
+        srow.addWidget(QLabel("Border style:" if self._kind
+                              else "Line style:"))
+        self._ls = QComboBox()
+        for _code, _lbl in _P5_LINE_STYLES:
+            self._ls.addItem(_lbl, _code)
+        _li = self._ls.findData(str(d.get("ls", "solid")))
+        self._ls.setCurrentIndex(_li if _li >= 0 else 0)
+        mw._apply_combo_style(self._ls, font_size=12)
+        srow.addWidget(self._ls); srow.addStretch(1)
+        lay.addLayout(srow)
 
         if self._kind is not None:
             frow = QHBoxLayout(); frow.setSpacing(8)
@@ -1726,7 +1786,8 @@ class _P5LineDialog(QDialog):
             except (ValueError, TypeError):
                 hd = 12.0
             self.result = {"arrow": self._arrow.isChecked(),
-                           "color": self._color, "width": w, "head": hd}
+                           "color": self._color, "width": w, "head": hd,
+                           "ls": self._ls.currentData()}
         else:
             try:
                 ang = float(self._angle.text()) % 360.0
@@ -1737,6 +1798,7 @@ class _P5LineDialog(QDialog):
             except (ValueError, TypeError):
                 fa = 0.15
             self.result = {"color": self._color, "width": w, "angle": ang,
+                           "ls": self._ls.currentData(),
                            "fill": self._fill.isChecked(),
                            "fill_color": self._fill_color, "fill_alpha": fa}
         super().accept()
@@ -1804,6 +1866,7 @@ def _make_p5_shape_patch(ax, a):
     p = PathPatch(path, transform=_P5ShapeTransform(ax, a),
                   edgecolor=a.get("color", "#111111"), facecolor="none",
                   lw=max(0.2, float(a.get("width", 1.6))),
+                  linestyle=_p5_line_style(a),            # M3
                   zorder=25, clip_on=False)
     if bool(a.get("fill", False)):
         p.set_facecolor(to_rgba(a.get("fill_color", "#f3c623"),
@@ -6398,37 +6461,760 @@ BIV_TEXTURE_MARKERS = {
 # de arriba se CONSERVAN como fallback LEGACY de marcadores: una celda vieja
 # con "Second rim" o "Concentric banding" asignado (proyectos pre-catálogo)
 # sigue graficándose con su símbolo histórico aunque ya no esté en la lista.
+# M16 (2026-10-25, Ola 19): nombres nuevos ("Homogeneous white", "Concentric
+# oscillatory zoning"), dos texturas más ("Sector zoning", "Fir-tree zoning")
+# y las descripciones REESCRITAS desde Corfu et al. (2003), Hoskin &
+# Schaltegger (2003) y Rubatto (2017) — las de antes exageraban (p. ej. "low
+# U, high Th/U" para el homogéneo claro: el brillo en CL refleja trazas y
+# daño por radiación, y Th/U no es diagnóstico por sí solo). Los proyectos
+# que ya existen se actualizan al abrirlos (`_migrate_texture_catalog_v2`).
 DEFAULT_TEXTURE_CATALOG = {
-    "positions": [
-        {"name": "Core", "desc": "Grain interior (earliest growth)",
+    "version": 3,
+    # M18 (2026-10-25): la forma del GRANO, columna "Grain shape" antes de
+    # Position. "Ovoid" (no "Elliptical") es el término de Hoskin &
+    # Schaltegger (2003).
+    "shapes": [
+        {"name": "Bipyramidal prism",
+         "desc": "Prism with a pyramid at each end; length/width 1–5, needle-"
+                 "like when it grew fast, stubby when it cooled slowly at "
+                 "depth (Corfu et al. 2003)",
+         "marker": "d"},
+        {"name": "Ovoid",
+         "desc": "Egg-shaped, rounded-elongate grain; common with multifaceted "
+                 "'soccer-ball' zircon in granulites (Hoskin & Schaltegger "
+                 "2003)",
+         "marker": "8"},
+        {"name": "Rounded",
+         "desc": "Subrounded to rounded grain: resorbed, modified by "
+                 "metamorphism or abraded during transport (Corfu et al. "
+                 "2003)",
          "marker": "o"},
-        {"name": "Rim", "desc": "Outer growth zone",
+    ],
+    "positions": [
+        {"name": "Core",
+         "desc": "Inner domain: the earliest growth, or an inherited "
+                 "(xenocrystic) core (Corfu et al. 2003)",
+         "marker": "o"},
+        {"name": "Rim",
+         "desc": "Outer domain: later growth, an overgrowth or a "
+                 "recrystallized margin (Corfu et al. 2003)",
          "marker": "^"},
     ],
     "types": [
         {"name": "Convolute",
-         "desc": "Irregular, flame-like zoning; commonly linked to recrystallization",
+         "desc": "Contorted, irregular zones where trace elements gathered "
+                 "during recrystallization (Corfu et al. 2003)",
          "marker": "o"},
         {"name": "Diffuse",
-         "desc": "Gradual, blurred boundaries between zones",
+         "desc": "Faint or blurred zoning: weak growth zoning, or zoning "
+                 "fading during metamorphic recrystallization (Corfu et al. "
+                 "2003)",
          "marker": "^"},
         {"name": "Luminescence patches",
-         "desc": "Irregular bright or dark patches in CL; variable U/Th distribution",
+         "desc": "Irregular bright and dark patches (patchy, mosaic): "
+                 "metamictization, fluid alteration or early replacement "
+                 "(Rubatto 2017)",
          "marker": "s"},
         {"name": "Porous",
-         "desc": "Abundant fluid-inclusion trails or dissolution cavities",
+         "desc": "Pores and inclusions, often of U–Th phases, left by "
+                 "fluid-aided dissolution–reprecipitation (Rubatto 2017)",
          "marker": "D"},
-        {"name": "Concentric zoning",
-         "desc": "Regular oscillatory zoning; typical of magmatic growth",
+        {"name": "Concentric oscillatory zoning",
+         "desc": "Fine growth bands parallel to the crystal faces; typical "
+                 "of growth from a melt, magmatic or anatectic (Corfu et al. "
+                 "2003; Rubatto 2017)",
          "marker": "v"},
-        {"name": "Homogeneous bright",
-         "desc": "Uniform high CL response; low U, high Th/U",
+        {"name": "Homogeneous white",
+         "desc": "Uniform, very bright CL: low trace-element contents; "
+                 "usually truly unzoned (Corfu et al. 2003)",
          "marker": "P"},
         {"name": "Homogeneous dark",
-         "desc": "Uniform low CL response; high U, metamorphic affinity",
+         "desc": "Uniform dark CL: trace-element-rich or radiation-damaged "
+                 "zircon that may hide zoning (Corfu et al. 2003); low Th/U is "
+                 "common in metamorphic zircon but not diagnostic (Rubatto "
+                 "2017)",
          "marker": "X"},
+        {"name": "Sector zoning",
+         "desc": "Domains grown on different crystal faces, with different "
+                 "trace-element contents; common in high-grade metamorphic "
+                 "zircon (Corfu et al. 2003; Rubatto 2017)",
+         "marker": "h"},
+        {"name": "Fir-tree zoning",
+         "desc": "Sector zoning with fir-tree-like banding from strongly "
+                 "fluctuating growth rates; typical of granulite-facies "
+                 "zircon (Corfu et al. 2003)",
+         "marker": "*"},
     ],
 }
+
+# Lo que traía el catálogo 1 de fábrica (§62): la migración renombra o
+# actualiza SOLO lo que el usuario dejó como venía.
+_TEXTURE_CATALOG_V1 = {
+    "shapes": {},                       # (no existía en el catálogo 1)
+    "positions": {"Core": "Grain interior (earliest growth)",
+                  "Rim": "Outer growth zone"},
+    "types": {
+        "Convolute": "Irregular, flame-like zoning; commonly linked to "
+                     "recrystallization",
+        "Diffuse": "Gradual, blurred boundaries between zones",
+        "Luminescence patches": "Irregular bright or dark patches in CL; "
+                                "variable U/Th distribution",
+        "Porous": "Abundant fluid-inclusion trails or dissolution cavities",
+        "Concentric zoning": "Regular oscillatory zoning; typical of "
+                             "magmatic growth",
+        "Homogeneous bright": "Uniform high CL response; low U, high Th/U",
+        "Homogeneous dark": "Uniform low CL response; high U, metamorphic "
+                            "affinity",
+    },
+}
+_TEXTURE_RENAMES_V2 = {"Concentric zoning": "Concentric oscillatory zoning",
+                       "Homogeneous bright": "Homogeneous white"}
+
+
+# ── M16 (2026-10-25) · los DIBUJOS del catálogo ilustrado de texturas ──────
+# Estilo A, "como catodoluminiscencia" (elección de Guillermo): escala de
+# grises sobre negro. Dibujos PROPIOS (clean-room), generados con numpy: un
+# campo escalar (el brillo CL) recortado al contorno del grano. Base:
+# tests/proto_texture_atlas.py. Coordenadas: x ∈ [-1.2, 1.2], y ∈ [-1.6, 1.6]
+# (proporción 3:4, eje c vertical).
+_ATLAS_EXT = (-1.2, 1.2, -1.6, 1.6)
+
+
+def _atlas_outline(shape):
+    """Contorno del grano (polígono cerrado) para `shape`."""
+    import numpy as np
+    if shape == "prism":                          # prisma bipiramidal
+        L, W, a = 1.45, 0.62, 0.42
+        return np.array([(0, L), (W, L - a), (W, -L + a), (0, -L),
+                         (-W, -L + a), (-W, L - a), (0, L)])
+    t = np.linspace(0, 2 * np.pi, 160)
+    if shape == "ovoid":                          # huevo: más ancho abajo
+        return np.c_[0.66 * np.cos(t) * (1 - 0.13 * np.sin(t)),
+                     1.22 * np.sin(t)]
+    r = 0.9 + 0.05 * np.sin(3 * t + 0.4) + 0.03 * np.sin(5 * t)   # redondeado
+    return np.c_[r * np.cos(t), 1.12 * r * np.sin(t)]
+
+
+def _atlas_scale(X, Y, poly, shape="prism"):
+    """"Distancia" normalizada al centro siguiendo la forma: 0 en el centro,
+    1 en el borde (las bandas de crecimiento siguen las caras). En el prisma
+    (convexo) es la función de calibre: el máximo, sobre las caras, de
+    n·p / d — bandas RECTAS paralelas a cada cara, como la zonación real."""
+    import numpy as np
+    if shape == "prism":
+        out = np.zeros_like(X)
+        for (xa, ya), (xb, yb) in zip(poly[:-1], poly[1:]):
+            nx, ny = yb - ya, -(xb - xa)
+            d = nx * xa + ny * ya
+            if d < 0:
+                nx, ny, d = -nx, -ny, -d
+            out = np.maximum(out, (nx * X + ny * Y) / d)
+        return out
+    ang = np.arctan2(Y, X)
+    pa = np.arctan2(poly[:, 1], poly[:, 0])
+    pr = np.hypot(poly[:, 0], poly[:, 1])
+    o = np.argsort(pa)
+    R = np.interp(ang, pa[o], pr[o], period=2 * np.pi)
+    return np.hypot(X, Y) / R
+
+
+def _atlas_field(draw, X, Y, s, rng):
+    """Brillo CL (0–1) de cada dibujo."""
+    import numpy as np
+    from scipy.ndimage import gaussian_filter as gf
+
+    def noise(sig):
+        n = gf(rng.normal(size=X.shape), sig)
+        return n / (np.abs(n).max() + 1e-9)
+
+    def osc(u, freq, contrast=0.33, mid=0.47):
+        return mid + contrast * np.sign(np.sin(u * freq)) * (
+            0.62 + 0.38 * np.sin(u * freq / 4.7 + 0.8))
+
+    if draw == "oscillatory":
+        # Bandas finas de grosor irregular, más marcadas hacia afuera.
+        u = s + 0.012 * np.sin(s * 9.0)
+        return gf(osc(u, 44, 0.30 + 0.06 * s) + 0.03 * noise(3), 0.6)
+    if draw == "white":
+        return 0.86 + 0.035 * noise(9)
+    if draw == "dark":
+        return 0.15 + 0.035 * noise(9)
+    if draw == "convolute":
+        # Interior con la zonación primaria borrosa; hacia afuera, bandas
+        # sinuosas, como plegadas, que se cortan (Hoskin & Schaltegger 2003).
+        w1, w2, w3 = noise(16), noise(7), noise(5)
+        ph = s * 26 + w1 * (2.0 + 5.0 * s) + w2 * 2.2 * s
+        outer = 0.5 + 0.4 * np.sin(ph) * (0.55 + 0.45 * np.tanh(w3 * 4))
+        inner = gf(osc(s, 30, 0.22), 2.0)
+        k = np.clip((s - 0.32) / 0.25, 0, 1)
+        return inner * (1 - k) + outer * k
+    if draw == "diffuse":
+        return gf(osc(s + 0.02 * noise(10), 20, 0.24) + 0.05 * noise(12), 6)
+    if draw == "patches":
+        base = gf(osc(s, 26, 0.12), 1.5)
+        b = noise(10)
+        return np.where(b > 0.18, 0.84, np.where(b < -0.25, 0.16, base)) \
+            + 0.03 * noise(3)
+    if draw == "porous":
+        f = 0.6 + 0.06 * np.sin(s * 25) + 0.03 * noise(6)
+        for _ in range(85):
+            cx, cy = rng.uniform(-0.6, 0.6), rng.uniform(-1.25, 1.25)
+            r = rng.uniform(0.018, 0.05)
+            f = np.where((X - cx) ** 2 + (Y - cy) ** 2 < r * r, 0.04, f)
+        return f
+    if draw == "sector":
+        # Sectores piramidales (arriba/abajo) distintos de los prismáticos.
+        pyr = np.abs(Y) * 0.62 > np.abs(X) * 1.15
+        f = np.where(pyr, 0.30, 0.70) + 0.05 * np.sin(s * 30)
+        return gf(f, 0.9)
+    if draw == "firtree":
+        pyr = np.abs(Y) * 0.62 > np.abs(X) * 1.15
+        chev = np.sin((Y + np.abs(X) * 1.3) * 30)     # bandas en V
+        f = np.where(pyr, 0.30 + 0.12 * np.sign(np.sin(s * 30)),
+                     0.55 + 0.25 * np.sign(chev))
+        return gf(f, 0.8)
+    if draw == "shape":
+        # Para las FORMAS: una zonación tenue, que no le robe la vista al
+        # contorno.
+        return gf(osc(s, 24, 0.13, 0.55), 2.0)
+    return 0.5 + 0 * X
+
+
+def _atlas_array(draw, shape, w, h, seed):
+    """(RGB uint8 h×w×3, polígono en píxeles, polígono del núcleo o None)."""
+    import numpy as np
+    from matplotlib.path import Path as _MPath
+    rng = np.random.default_rng(seed)
+    x0, x1, y0, y1 = _ATLAS_EXT
+    X, Y = np.meshgrid(np.linspace(x0, x1, w), np.linspace(y1, y0, h))
+    poly = _atlas_outline(shape)
+    s = _atlas_scale(X, Y, poly, shape)
+    core_poly = None
+    if draw in ("core", "rim"):
+        # Núcleo heredado: redondeado, con su propia zonación TRUNCADA por
+        # el borde; el borde, un sobrecrecimiento oscuro y casi sin zonar.
+        t = np.linspace(0, 2 * np.pi, 120)
+        rc = 0.44 + 0.04 * np.sin(3 * t + 1.1) + 0.025 * np.sin(5 * t)
+        core_poly = np.c_[0.95 * rc * np.cos(t) + 0.03,
+                          1.45 * rc * np.sin(t) + 0.05]
+        inside_core = _MPath(core_poly).contains_points(
+            np.c_[X.ravel(), Y.ravel()]).reshape(X.shape)
+        # La zonación del núcleo es la de un cristal más viejo y más grande
+        # (centrado fuera): el contorno del núcleo la TRUNCA.
+        u = np.hypot((X - 0.55) * 1.2, Y - 0.95)
+        from scipy.ndimage import gaussian_filter as gf
+        corez = gf(0.52 + 0.3 * np.sign(np.sin(u * 30)), 0.7)
+        rimz = 0.24 + 0.05 * np.sin(s * 22)
+        f = np.where(inside_core, corez, rimz)
+    else:
+        f = _atlas_field(draw, X, Y, s, rng)
+    f = np.clip(f, 0, 1)
+    inside = _MPath(poly).contains_points(
+        np.c_[X.ravel(), Y.ravel()]).reshape(X.shape)
+    g = (f * 235 + 10).astype(np.uint8)
+    bg = np.array([11, 11, 14], np.uint8)
+    rgb = np.where(inside[..., None], np.repeat(g[..., None], 3, axis=2), bg)
+
+    def to_px(p):
+        return np.c_[(p[:, 0] - x0) / (x1 - x0) * (w - 1),
+                     (y1 - p[:, 1]) / (y1 - y0) * (h - 1)]
+    return (np.ascontiguousarray(rgb.astype(np.uint8)), to_px(poly),
+            to_px(core_poly) if core_poly is not None else None)
+
+
+_ATLAS_W, _ATLAS_H = 360, 480         # resolución del dibujo (3:4)
+_ATLAS_CACHE = {}
+
+
+def _atlas_qimage(draw, shape):
+    """El dibujo de una ficha como QImage (360×480) con el contorno del
+    grano; en Core y Rim, el dominio se señala en ámbar. Se genera UNA vez
+    por sesión (`_ATLAS_CACHE`): cada uno cuesta unas decenas de ms."""
+    key = (draw, shape)
+    if key in _ATLAS_CACHE:
+        return _ATLAS_CACHE[key]
+    import zlib
+    rgb, poly, core = _atlas_array(draw, shape, _ATLAS_W, _ATLAS_H,
+                                   zlib.crc32(f"{draw}/{shape}".encode()))
+    img = QImage(rgb.data, rgb.shape[1], rgb.shape[0], rgb.strides[0],
+                 QImage.Format.Format_RGB888).copy()
+    p = QPainter(img)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+    def _qpoly(a):
+        return QPolygonF([QPointF(float(x), float(y)) for x, y in a])
+    if core is not None:
+        amber = QColor(230, 160, 40, 70)
+        pen = QPen(QColor(240, 170, 50), 3, Qt.PenStyle.DashLine)
+        if draw == "core":
+            p.setBrush(QBrush(amber))
+            p.setPen(pen)
+            p.drawPolygon(_qpoly(core))
+        else:
+            pa, pb = QPainterPath(), QPainterPath()
+            pa.addPolygon(_qpoly(poly))
+            pb.addPolygon(_qpoly(core))
+            p.fillPath(pa.subtracted(pb), QBrush(amber))
+            p.setPen(pen)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawPolygon(_qpoly(core))
+    p.setPen(QPen(QColor(216, 216, 216), 2))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawPolygon(_qpoly(poly))
+    p.end()
+    _ATLAS_CACHE[key] = img
+    return img
+
+
+def _atlas_placeholder():
+    """Lo que se ve en la ficha de una textura del usuario sin imagen."""
+    if "__ph__" in _ATLAS_CACHE:
+        return _ATLAS_CACHE["__ph__"]
+    img = QImage(_ATLAS_W, _ATLAS_H, QImage.Format.Format_RGB888)
+    img.fill(QColor(11, 11, 14))
+    p = QPainter(img)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(QPen(QColor(120, 120, 128), 2, Qt.PenStyle.DashLine))
+    w, h = _ATLAS_W, _ATLAS_H
+    p.drawPolygon(QPolygonF([QPointF(w * .5, h * .05), QPointF(w * .76, h * .2),
+                             QPointF(w * .76, h * .8), QPointF(w * .5, h * .95),
+                             QPointF(w * .24, h * .8), QPointF(w * .24, h * .2)]))
+    f = QFont()
+    f.setPixelSize(22)
+    p.setFont(f)
+    p.drawText(QRectF(0, h * .4, w, h * .2), Qt.AlignmentFlag.AlignCenter,
+               "No image yet")
+    p.end()
+    _ATLAS_CACHE["__ph__"] = img
+    return img
+
+
+# Las FICHAS del catálogo ilustrado (M16, 2026-10-25): dibujo, interpretación
+# geológica y referencias de cada entrada de fábrica. Redactadas desde los
+# tres PDF de Papers/ (lección §156: nada de memoria) — resúmenes propios, no
+# citas textuales. Una textura que agregue el usuario no tiene ficha: muestra
+# su descripción y un hueco para su propia imagen.
+_ATLAS_REFS = {
+    "corfu": "Corfu F, Hanchar JM, Hoskin PWO, Kinny P (2003) Atlas of zircon "
+             "textures. Reviews in Mineralogy and Geochemistry 53: 469–500",
+    "hs": "Hoskin PWO, Schaltegger U (2003) The composition of zircon and "
+          "igneous and metamorphic petrogenesis. Reviews in Mineralogy and "
+          "Geochemistry 53: 27–62",
+    "rubatto": "Rubatto D (2017) Zircon: the metamorphic mineral. Reviews in "
+               "Mineralogy and Geochemistry 83: 261–295",
+}
+_ATLAS_CL_NOTE = (
+    "Reading CL: the emission comes mainly from trivalent REE (Dy³⁺ the "
+    "principal one), while U⁴⁺ and the radiation damage from its decay "
+    "suppress it; bright CL areas are usually dark in BSE and vice versa "
+    "(Corfu et al. 2003).")
+_TEXTURE_ATLAS = {
+    ("shapes", "Bipyramidal prism"): {
+        "draw": "shape", "shape": "prism", "refs": ["corfu", "hs"],
+        "interp": (
+            "Zircon is tetragonal and most commonly grows as doubly "
+            "terminated prisms with length-to-width ratios of 1 to 5; the "
+            "speed of crystallization is the main control on elongation. "
+            "Needle-like (acicular) crystals are common in rapidly "
+            "crystallized sub-volcanic intrusions, high-level granites and "
+            "gabbros, whereas stubby and equant forms are more common in "
+            "deep-seated, slowly cooled intrusions (Corfu et al. 2003). "
+            "Rapidly crystallized volcanic zircon reaches width-to-length "
+            "ratios of about 1:12 (Hoskin & Schaltegger 2003). Euhedral "
+            "shapes also occur in metamorphic rocks rich in fluid or melt, "
+            "such as amphibolite-facies mica schists and migmatites (Corfu "
+            "et al. 2003).")},
+    ("shapes", "Ovoid"): {
+        "draw": "shape", "shape": "ovoid", "refs": ["hs"],
+        "interp": (
+            "Rounded and ovoid grains are the typical morphologies of zircon "
+            "in granulite-grade rocks. They are interpreted as resorption by "
+            "a zircon-undersaturated intergranular fluid, which may also etch "
+            "and pit the surface, and are often accompanied by multifaceted "
+            "'soccer-ball' zircon (the S22 type of Pupin 1980) (Hoskin & "
+            "Schaltegger 2003).")},
+    ("shapes", "Rounded"): {
+        "draw": "shape", "shape": "rounded", "refs": ["corfu", "hs"],
+        "interp": (
+            "Metamorphically grown or modified zircon is generally subrounded "
+            "and highly resorbed; the modification ranges from moderately "
+            "rounded edges to smoothly subrounded grains whose original shape "
+            "is gone (Corfu et al. 2003). Xenocrysts assimilated by a magma "
+            "can also be subrounded by resorption, and detrital cores "
+            "occasionally keep the abrasion and fracturing of erosion and "
+            "sedimentation — but on their own such clues are ambiguous (Corfu "
+            "et al. 2003). In granulites, see also Ovoid (Hoskin & "
+            "Schaltegger 2003).")},
+    ("positions", "Core"): {
+        "draw": "core", "shape": "prism", "refs": ["corfu", "rubatto"],
+        "interp": (
+            "The inner domain of a grain: either the earliest growth of the "
+            "same crystal or an older, inherited (xenocrystic) zircon mantled "
+            "by new growth — zircon xenocrysts commonly occur as cores "
+            "mantled by newly grown magmatic zircon (Corfu et al. 2003). An "
+            "inherited core is recognized by a sharp, often irregular "
+            "boundary that truncates its internal zoning; in metamorphic "
+            "zircon the new domain shows sharp boundaries against any relict "
+            "core (Rubatto 2017). A U-rich core can become metamict and "
+            "fracture the rim around it (Corfu et al. 2003). Core and rim may "
+            "record different events.")},
+    ("positions", "Rim"): {
+        "draw": "rim", "shape": "prism", "refs": ["rubatto", "hs", "corfu"],
+        "interp": (
+            "The outer domain: later growth of the same crystal, a magmatic "
+            "or metamorphic overgrowth on an older core, or a recrystallized "
+            "margin. An overgrowth is a new crystal domain with sharp "
+            "boundaries against the relict core and regular growth textures; "
+            "complete metamorphic replacement resets the U–Pb system, and "
+            "such domains (commonly rims) have poor zoning, homogeneous "
+            "chemistry and reproducible ages (Rubatto 2017). Zircon grown in "
+            "high-grade metamorphic rocks often shows a low-luminescence "
+            "inner zone, then sector-zoned domains and an oscillatory-zoned "
+            "outer part (Hoskin & Schaltegger 2003). Around a low-U core, a "
+            "high-U rim turns much darker in colour as it becomes metamict — "
+            "a clue to core–rim textures under the microscope (Corfu et al. "
+            "2003).")},
+    ("types", "Concentric oscillatory zoning"): {
+        "draw": "oscillatory", "shape": "prism",
+        "refs": ["hs", "rubatto", "corfu"],
+        "interp": (
+            "Fine bands parallel to the crystal faces, made by trace-element "
+            "variations during growth. It is the predominant texture of "
+            "igneous zircon and probably involves a kinetic feedback at the "
+            "crystal/melt interface (Hoskin & Schaltegger 2003). Metamorphic "
+            "zircon grown from an anatectic melt, in the granulite facies or "
+            "under hydrothermal conditions can also show regular oscillatory "
+            "or sector zoning, generally weaker (Rubatto 2017, Table 1). "
+            "Late- and post-magmatic modification tends to disrupt concentric "
+            "oscillatory zoning (Corfu et al. 2003).")},
+    ("types", "Homogeneous white"): {
+        "draw": "white", "shape": "prism", "refs": ["corfu", "rubatto"],
+        "interp": (
+            "A domain with uniform, very bright CL. Such domains are likely "
+            "to be genuinely homogeneous, because they have very low "
+            "trace-element contents (Corfu et al. 2003). Metamorphic zircon "
+            "most commonly shows no regular zoning, with either homogeneous "
+            "CL/BSE emission or cloudy, irregular zoning; low CL is frequent "
+            "in high-grade metamorphic zircon, but bright CL has also been "
+            "observed (Rubatto 2017).")},
+    ("types", "Homogeneous dark"): {
+        "draw": "dark", "shape": "prism", "refs": ["corfu", "rubatto"],
+        "interp": (
+            "A domain with uniform, dark CL. Its apparent lack of zoning is "
+            "suspect: the luminescence may be poisoned by high trace-element "
+            "contents or by metamictization, hiding zoning that is there "
+            "(Corfu et al. 2003). High-grade metamorphic zircon often has "
+            "relatively low CL, possibly from high U (Rubatto 2017). Low "
+            "Th/U is common in metamorphic zircon but not diagnostic: it "
+            "depends on coexisting Th-rich phases such as monazite or "
+            "allanite and is less common in UHT and mafic rocks (Rubatto "
+            "2017, Table 1).")},
+    ("types", "Convolute"): {
+        "draw": "convolute", "shape": "prism",
+        "refs": ["hs", "corfu", "rubatto"],
+        "interp": (
+            "Non-planar zoning of sinuous low-CL and high-CL bands that may "
+            "look folded ('flow zones'), usually in the outer parts of the "
+            "grain; individual zones become discontinuous and truncated. It "
+            "is considered a further convolution of blurred primary zoning "
+            "(Hoskin & Schaltegger 2003). Recrystallization expels trace "
+            "elements, bringing the zircon closer to its pure composition, "
+            "and concentrates the impurities in trace-element-rich convolute "
+            "zones (Corfu et al. 2003). Unzoned or weakly convolute zircon "
+            "forms by replacement, including dissolution–precipitation, in "
+            "the subsolidus above greenschist facies (Rubatto 2017, Table "
+            "1).")},
+    ("types", "Diffuse"): {
+        "draw": "diffuse", "shape": "prism", "refs": ["hs", "corfu"],
+        "interp": (
+            "Faint or blurred zoning. Blurred ('faded') primary oscillatory "
+            "zoning can be the first sign of metamorphic disturbance (Hoskin "
+            "& Schaltegger 2003); with metamorphism, igneous zoning becomes "
+            "progressively convoluted, blurred and thickened, and "
+            "high-pressure rocks show irregular, diffuse ('auroral-light') "
+            "zoning (Corfu et al. 2003). Faint zoning can also be primary, "
+            "when the compositional differences between growth zones are "
+            "very small (Corfu et al. 2003).")},
+    ("types", "Luminescence patches"): {
+        "draw": "patches", "shape": "prism", "refs": ["rubatto", "corfu"],
+        "interp": (
+            "Irregular bright and dark patches (patchy or mosaic zoning) "
+            "that cut across the growth zoning. Subsolidus: "
+            "metamictization, fluid alteration or the initial stages of "
+            "replacement (Rubatto 2017, Table 1); the process expels trace "
+            "elements, increases porosity and leaves mottled, patchy zoning "
+            "(Rubatto 2017). A patchy mosaic can record metasomatic "
+            "replacement of a low-U domain by zircon richer in U (Corfu et "
+            "al. 2003).")},
+    ("types", "Porous"): {
+        "draw": "porous", "shape": "prism", "refs": ["rubatto", "hs", "corfu"],
+        "interp": (
+            "Pores and inclusions, often of Th and U phases. Subsolidus "
+            "dissolution–precipitation (Rubatto 2017, Table 1); secondary "
+            "inclusions are recognized by disturbed CL zoning, fractures, "
+            "porosity and metamictization around them (Rubatto 2017). "
+            "Recrystallized zircon of this kind can reach ~10 vol% porosity "
+            "with fluid-inclusion voids absent from pristine crystals (Hoskin "
+            "& Schaltegger 2003). Example: porous zircon from a peralkaline "
+            "granite full of U- and Th-rich inclusions (Corfu et al. 2003).")},
+    ("types", "Sector zoning"): {
+        "draw": "sector", "shape": "prism", "refs": ["corfu", "hs", "rubatto"],
+        "interp": (
+            "Domains grown on different crystal faces take up trace elements "
+            "differently: pyramidal sectors can be richer in U than prismatic "
+            "ones, and sectors can differ by 20–100% in Hf and Y. It has been "
+            "attributed to kinetic factors and rapid changes in the growth "
+            "environment, or to the balance between growth rate and lattice "
+            "diffusivity (Corfu et al. 2003). It is a dominant feature of "
+            "igneous zircon — perhaps all zircon is sector zoned (Hoskin & "
+            "Schaltegger 2003) — and weak sector zoning also forms in "
+            "metamorphic zircon grown from melt or fluid (Rubatto 2017).")},
+    ("types", "Fir-tree zoning"): {
+        "draw": "firtree", "shape": "prism", "refs": ["corfu", "rubatto"],
+        "interp": (
+            "Sector zoning in which the bands of each sector make "
+            "fir-tree-like chevrons; it can surround older zircon, and is "
+            "documented in granulite-facies rocks and lower-crustal xenoliths "
+            "(Corfu et al. 2003). Weak oscillatory, sector or fir-tree zoning "
+            "is common in metamorphic zircon crystallized in high-grade "
+            "rocks, likely from anatectic melts (Rubatto 2017). Caution for "
+            "Ti-in-zircon: different sectors of a fir-tree zircon can differ "
+            "in Ti by the equivalent of ~40 °C (Tailby et al. 2011, in "
+            "Rubatto 2017).")},
+}
+
+
+_TEXTURE_COL_HEADERS = {"shapes": "Grain shape", "positions": "Position",
+                        "types": "Texture\nType"}
+# M17 (2026-10-25): COMBINACIONES de forma ▸ posición ▸ textura, de tres
+# niveles; cualquiera puede ser "Any" en una regla (M19). Una combinación se
+# escribe con sus niveles elegidos en este orden, p. ej. "Core ▸ Homogeneous
+# dark"; un nivel vacío en un análisis se escribe "—" (así los conteos
+# cuadran con el total).
+_COMBO_LEVELS = ("shapes", "positions", "types")
+_COMBO_LEVEL_LABELS = {"shapes": "Grain shape", "positions": "Position",
+                       "types": "Texture type"}
+_COMBO_SEP = " ▸ "
+_COMBO_EMPTY = "—"
+_COMBO_ANY = "Any"
+
+
+def _combo_label(values):
+    return _COMBO_SEP.join(str(v) for v in values)
+
+
+def _combo_matches(values, pattern):
+    """¿La combinación `values` (tupla por nivel, en el orden de
+    _COMBO_LEVELS) cae en `pattern` (dict nivel → valor o "Any")?"""
+    for i, lvl in enumerate(_COMBO_LEVELS):
+        want = (pattern or {}).get(lvl, _COMBO_ANY) or _COMBO_ANY
+        if want != _COMBO_ANY and values[i] != want:
+            return False
+    return True
+
+
+# "Marker by ▸ …" de Bivariate y Tectonic → qué lista de texturas lo pone.
+_MARKER_BY_TEXTURE = {"shape": "shapes", "position": "positions",
+                      "type": "types"}
+# Su casilla en panel2_config (lo ofrecido por el selector de cada columna).
+_TEXTURE_CFG_KEYS = {"shapes": "textures_shapes",
+                     "positions": "textures_positions",
+                     "types": "textures_types"}
+
+
+def _rename_texture_in_rules_and_combos(proj, kind, old, new):
+    """M19/M17 (2026-10-25): una textura renombrada (o borrada, new="")
+    también cambia en las reglas de los sets ("By texture") y en los símbolos
+    elegidos de "Marker by ▸ By texture combination" — los dos la guardan por
+    NOMBRE y quedarían huérfanos en silencio (regla de §115). Al borrarla, la
+    combinación que la pedía se quita; una regla que se queda sin nada, se
+    quita."""
+    for g in proj.get("sets") or []:
+        r = g.get("rule")
+        if not isinstance(r, dict) or not r.get("textures"):
+            continue
+        pats = []
+        for p in r["textures"]:
+            if isinstance(p, dict) and p.get(kind) == old:
+                if not new:
+                    continue
+                p = dict(p)
+                p[kind] = new
+            pats.append(p)
+        if pats:
+            r["textures"] = pats
+        else:
+            r.pop("textures", None)
+            if not r.get("key"):
+                g.pop("rule", None)
+
+    def _walk(d):
+        if isinstance(d, dict):
+            for k, v in list(d.items()):
+                if k in ("biv_combo", "tect_combo") and isinstance(v, dict):
+                    lv = [l for l in _COMBO_LEVELS
+                          if l in (v.get("levels") or [])]
+                    if kind not in lv:
+                        continue
+                    i = lv.index(kind)
+                    mk = {}
+                    for lab, sym in (v.get("markers") or {}).items():
+                        parts = str(lab).split(_COMBO_SEP)
+                        if len(parts) == len(lv) and parts[i] == old:
+                            if not new:
+                                continue
+                            parts[i] = new
+                        mk[_COMBO_SEP.join(parts)] = sym
+                    v["markers"] = mk
+                else:
+                    _walk(v)
+        elif isinstance(d, list):
+            for x in d:
+                _walk(x)
+    _walk(proj.get("panel5_config"))
+
+
+def _rename_texture_in_project(proj, kind, old, new):
+    """Renombra (o quita, con new="") una textura en un proyecto TODAVÍA SIN
+    VENTANA (al abrirlo): sus celdas de Tabla 1 —también las ocultas—, las
+    opciones del menú de su columna y su casilla en panel2_config. Es la
+    versión de datos puros de `_rewrite_texture_cells` +
+    `_rename_texture_option` (§161)."""
+    header = _TEXTURE_COL_HEADERS[kind]
+    cols = proj.get("dynamic_cols") or []
+    col = None
+    for i, (h, w, wi) in enumerate(cols):
+        if h != header:
+            continue
+        col = len(UPB_COLUMNS) + i
+        if wi and wi[0] == "dropdown":
+            cols[i] = (h, w, (wi[0], [new if o == old else o
+                                      for o in (wi[1] or [])
+                                      if new or o != old]))
+    for s in proj.get("samples") or []:
+        for r in s.get("rows") or []:
+            cells = r.get("cells") or {}
+            if col is not None and cells.get(col) == old:
+                if new:
+                    cells[col] = new
+                else:
+                    cells.pop(col, None)
+            hid = r.get("hidden_dynamic")
+            if hid and hid.get(header) == old:
+                if new:
+                    hid[header] = new
+                else:
+                    hid.pop(header, None)
+    key = _TEXTURE_CFG_KEYS[kind]
+    d = (proj.get("panel2_config") or {}).get(key)
+    if isinstance(d, dict) and old in d:
+        v = d.pop(old)
+        if new:
+            d[new] = v
+    _rename_texture_in_rules_and_combos(proj, kind, old, new)
+
+
+def _migrate_texture_catalog_v2(proj):
+    """M16 (2026-10-25, decisión de Guillermo: "sí, al abrirlos"): un proyecto
+    con el catálogo 1 de fábrica pasa al 2 — UNA vez (`version`). Solo toca
+    lo que el usuario dejó como venía: renombra "Concentric zoning" y
+    "Homogeneous bright" (con sus celdas) si siguen ahí y el nombre nuevo no
+    existe; cambia las descripciones que siguen siendo las de fábrica; y
+    agrega "Sector zoning" y "Fir-tree zoning" si faltan. Lo que el usuario
+    haya renombrado, reescrito o borrado se respeta."""
+    import copy
+    cat = proj.get("texture_catalog")
+    if not isinstance(cat, dict):
+        return
+    # M18: la lista de formas de grano, sembrada si falta (también en un
+    # proyecto que ya sea versión 2).
+    if not isinstance(cat.get("shapes"), list):
+        cat["shapes"] = copy.deepcopy(DEFAULT_TEXTURE_CATALOG["shapes"])
+    try:
+        ver = int(cat.get("version", 1) or 1)
+    except (TypeError, ValueError):
+        ver = 1
+    if ver < 2:
+        _migrate_texture_catalog_to_v2(proj, cat)
+    if ver < 3:
+        _migrate_texture_catalog_to_v3(proj, cat)
+
+
+def _texture_name_key(name):
+    """Clave para reconocer el MISMO nombre escrito de otra forma: minúsculas,
+    solo letras, palabras en cualquier orden y la errata más común
+    ("oscilatory"). "Oscilatory concentric zoning" = "Concentric oscillatory
+    zoning"."""
+    import re
+    words = re.findall(r"[a-z]+", str(name or "").lower())
+    fix = {"oscilatory": "oscillatory", "oscilating": "oscillating"}
+    return tuple(sorted(fix.get(w, w) for w in words))
+
+
+def _migrate_texture_catalog_to_v3(proj, cat):
+    """2026-10-26 (Guillermo, con su proyecto SJC): (1) una textura con el
+    nombre de fábrica escrito de otra forma ("Oscilatory concentric zoning")
+    pasa al nombre de fábrica, con sus celdas, y así gana su ficha y su
+    dibujo; (2) una descripción que sigue siendo la de fábrica del catálogo 1
+    se actualiza también cuando el nombre ya lo había cambiado el usuario; y
+    (3) las celdas que se quedaron con un nombre de fábrica VIEJO ("Concentric
+    zoning") por el bug de renombrar de antes de §161 pasan al nuevo, si ése
+    existe y el viejo ya no está en el catálogo. Una sola vez."""
+    cat["version"] = 3
+    rev = {}                                 # nombre nuevo → nombre viejo
+    for _o, _n in _TEXTURE_RENAMES_V2.items():
+        rev[_n] = _o
+    for kind in ("shapes", "positions", "types"):
+        entries = cat.setdefault(kind, [])
+        stock = {e["name"]: e for e in DEFAULT_TEXTURE_CATALOG[kind]}
+        v1 = _TEXTURE_CATALOG_V1.get(kind) or {}
+        names = {e.get("name") for e in entries}
+        by_key = {_texture_name_key(n): n for n in stock}
+        for e in entries:
+            nm = e.get("name")
+            want = by_key.get(_texture_name_key(nm))
+            if want and want != nm and want not in names:
+                names.discard(nm)
+                names.add(want)
+                e["name"] = want
+                _rename_texture_in_project(proj, kind, nm, want)
+            nm = e.get("name")
+            if nm in stock:
+                olds = {v1.get(nm), v1.get(rev.get(nm, ""))} - {None}
+                if (e.get("desc") or "") in olds:
+                    e["desc"] = stock[nm]["desc"]
+        if kind == "types":
+            for old, new in _TEXTURE_RENAMES_V2.items():
+                if new in names and old not in names:
+                    _rename_texture_in_project(proj, kind, old, new)
+
+
+def _migrate_texture_catalog_to_v2(proj, cat):
+    """El paso 1 → 2 de `_migrate_texture_catalog_v2` (M16)."""
+    import copy
+    cat["version"] = 2
+    for kind in ("positions", "types"):
+        entries = cat.setdefault(kind, [])
+        v1 = _TEXTURE_CATALOG_V1[kind]
+        new_by = {e["name"]: e for e in DEFAULT_TEXTURE_CATALOG[kind]}
+        names = {e.get("name") for e in entries}
+        for e in entries:
+            old = e.get("name")
+            stock_desc = (old in v1 and (e.get("desc") or "") == v1[old])
+            new = _TEXTURE_RENAMES_V2.get(old) if kind == "types" else None
+            if new and new not in names:
+                e["name"] = new
+                names.discard(old)
+                names.add(new)
+                _rename_texture_in_project(proj, kind, old, new)
+            if stock_desc and e.get("name") in new_by:
+                e["desc"] = new_by[e["name"]]["desc"]
+        lower = {str(n).strip().lower() for n in names}
+        for e in DEFAULT_TEXTURE_CATALOG[kind]:
+            if (e["name"].lower() not in lower
+                    and e["name"] not in _TEXTURE_RENAMES_V2.values()
+                    and e["name"] not in v1):
+                entries.append(copy.deepcopy(e))
 
 
 def _default_texture_catalog():
@@ -6456,6 +7242,139 @@ TEXTURE_MARKER_CHOICES = [
     ("h", "⬢ Hexagon"),
     ("8", "Octagon"),
 ]
+
+
+# 2026-10-26 (Guillermo): símbolos PROPIOS de zircón — la rosquilla para los
+# bordes, el blanco (anillo + punto) para los núcleos, el medio círculo para un
+# análisis que mezcla núcleo y borde, el reloj de arena de la zonación
+# sectorial, la media luna de un borde parcial, el anillo doble de la zonación
+# oscilatoria y tres siluetas de grano. Se REGISTRAN en matplotlib
+# (`MarkerStyle`) con un código propio: así `marker="zrn_ring"` funciona en
+# cualquier pestaña, en la leyenda y en el PDF, y se guarda en el proyecto como
+# cualquier otro código. Los huecos son reales (anillos con sentido de giro
+# contrario): una rosquilla blanca y una negra se distinguen.
+def _zrn_marker_paths():
+    import numpy as np
+    from matplotlib.path import Path as _P
+
+    def circ(r, ccw=True, n=64):
+        t = np.linspace(0, 2 * np.pi, n)
+        if not ccw:
+            t = t[::-1]
+        return np.c_[r * np.cos(t), r * np.sin(t)]
+
+    def compound(*rings):
+        verts, codes = [], []
+        for r in rings:
+            verts += list(r)
+            codes += ([_P.MOVETO] + [_P.LINETO] * (len(r) - 2)
+                      + [_P.CLOSEPOLY])
+        return _P(np.array(verts), codes)
+
+    t = np.linspace(np.pi / 2, 3 * np.pi / 2, 40)
+    half = np.r_[np.c_[np.cos(t), np.sin(t)], [[0, -1], [0, 1]]] * 0.8
+    a = np.linspace(-np.pi * 0.75, np.pi * 0.75, 40)
+    outer = np.c_[np.cos(a + np.pi), np.sin(a + np.pi)]
+    inner = np.c_[0.35 + 0.8 * np.cos(a[::-1] + np.pi),
+                  0.8 * np.sin(a[::-1] + np.pi)]
+    te = np.linspace(0, 2 * np.pi, 64)
+    rr = 0.95 + 0.06 * np.sin(3 * te + 0.4) + 0.04 * np.sin(5 * te)
+    return {
+        "zrn_ring": compound(circ(1.0), circ(0.55, ccw=False)),
+        "zrn_target": compound(circ(1.0), circ(0.72, ccw=False),
+                               circ(0.42)),
+        "zrn_half": compound(circ(1.0), circ(0.8, ccw=False), half),
+        "zrn_hourglass": compound(np.array([(-0.8, 1), (0.8, 1), (0, 0),
+                                            (0.8, -1), (-0.8, -1), (0, 0),
+                                            (-0.8, 1)])),
+        "zrn_crescent": compound(np.r_[outer, inner, outer[:1]]),
+        "zrn_rings2": compound(circ(1.0), circ(0.8, ccw=False), circ(0.55),
+                               circ(0.35, ccw=False)),
+        "zrn_prism": compound(np.array([(0, 1), (0.5, 0.6), (0.5, -0.6),
+                                        (0, -1), (-0.5, -0.6), (-0.5, 0.6),
+                                        (0, 1)])),
+        "zrn_ovoid": compound(np.c_[0.62 * np.cos(te) * (1 - 0.12 * np.sin(te)),
+                                    np.sin(te)]),
+        "zrn_rounded": compound(np.c_[rr * np.cos(te), 0.95 * rr * np.sin(te)]),
+    }
+
+
+ZIRCON_MARKER_CHOICES = [
+    ("zrn_ring", "Ring — rims"),
+    ("zrn_target", "Target — cores"),
+    ("zrn_half", "Half circle — core + rim"),
+    ("zrn_rings2", "Double ring — oscillatory zoning"),
+    ("zrn_hourglass", "Hourglass — sector zoning"),
+    ("zrn_crescent", "Crescent — partial rim"),
+    ("zrn_prism", "Zircon — bipyramidal prism"),
+    ("zrn_ovoid", "Zircon — ovoid"),
+    ("zrn_rounded", "Zircon — rounded"),
+]
+
+
+def _register_zircon_markers():
+    """Da de alta los símbolos de zircón en `MarkerStyle` (una vez)."""
+    from matplotlib.markers import MarkerStyle
+    for code, path in _zrn_marker_paths().items():
+        if code in MarkerStyle.markers:
+            continue
+        MarkerStyle.markers[code] = code
+
+        def _setter(self, _p=path):
+            self._set_custom_marker(_p)
+        setattr(MarkerStyle, "_set_" + code, _setter)
+
+
+_register_zircon_markers()
+TEXTURE_MARKER_CHOICES += ZIRCON_MARKER_CHOICES
+
+
+def _marker_icon(code, size=18, color="#1a2a3a", alpha=1.0, edge="#222222"):
+    """QIcon con el símbolo de matplotlib `code` (los de zircón incluidos),
+    dibujado con QPainter: para los menús de símbolos y el editor de
+    combinaciones."""
+    from matplotlib.markers import MarkerStyle
+    from matplotlib.path import Path as _P
+    dpr = 2.0
+    pm = QPixmap(int(size * dpr), int(size * dpr))
+    pm.setDevicePixelRatio(dpr)
+    pm.fill(Qt.GlobalColor.transparent)
+    try:
+        ms = MarkerStyle(code)
+        path = ms.get_path().transformed(ms.get_transform())
+    except (ValueError, TypeError):
+        return QIcon(pm)
+    qp = QPainterPath()
+    qp.setFillRule(Qt.FillRule.OddEvenFill)
+    k = size * 0.82                      # el símbolo mide ~0.82 del ícono
+    c = size / 2.0
+
+    def pt(v):
+        return QPointF(c + float(v[0]) * k, c - float(v[1]) * k)
+    for verts, kind in path.iter_segments(curves=True, simplify=False):
+        v = verts.reshape(-1, 2)
+        if kind == _P.MOVETO:
+            qp.moveTo(pt(v[0]))
+        elif kind == _P.LINETO:
+            qp.lineTo(pt(v[0]))
+        elif kind == _P.CURVE3:
+            qp.quadTo(pt(v[0]), pt(v[1]))
+        elif kind == _P.CURVE4:
+            qp.cubicTo(pt(v[0]), pt(v[1]), pt(v[2]))
+        elif kind == _P.CLOSEPOLY:
+            qp.closeSubpath()
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setOpacity(max(0.05, min(1.0, float(alpha))))
+    if ms.is_filled():
+        p.setBrush(QBrush(QColor(color)))
+        p.setPen(QPen(QColor(edge), 0.8))
+    else:
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(QColor(color), 1.4))
+    p.drawPath(qp)
+    p.end()
+    return QIcon(pm)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -7359,6 +8278,8 @@ _RATIO_HEADER_ALIASES = {
     "206pb/238u": "206pb/238u", "206/238": "206pb/238u",
     "6/38": "206pb/238u", "pb206/u238": "206pb/238u",
     "rho": "rho", "rho7/5": "rho", "errorcorrelation": "rho", "rhotw": "rho",
+    # M18 (2026-10-25): la forma del grano (columna "Grain shape").
+    "shape": "grainshape", "grainmorphology": "grainshape",
 }
 
 # §86: cada laboratorio bautiza distinto la columna que identifica el
@@ -7374,6 +8295,36 @@ _ID_HEADER_ALIASES = {
     "sampleid", "sample/spot", "samplespot", "spot", "spotid", "spotname",
     "spotnumber", "analysis", "analysisname", "grain", "grainid", "id",
 }
+
+
+class _HeaderDragWatch(QObject):
+    """2026-10-24 (M20): ¿está el USUARIO arrastrando el borde de una columna?
+    `sectionResized` llega igual cuando el programa cambia anchos (zoom,
+    plegar un grupo, la última columna que se estira al mover un divisor de
+    paneles); solo los arrastres hechos con el ratón SOBRE el encabezado se
+    recuerdan. Va instalado en el viewport del encabezado: solo ve sus
+    clics, así que no cuesta nada en el resto de la app."""
+
+    def eventFilter(self, obj, ev):
+        t = ev.type()
+        if t == _EV_MOUSE_PRESS:
+            self.parent()._p_user_drag = True
+        elif t == _EV_MOUSE_RELEASE:
+            self.parent()._p_user_drag = False
+        return False
+
+
+def _t_col_width_keys(table):
+    """Clave ESTABLE de cada columna para recordar su ancho: el texto del
+    encabezado (las posiciones cambian con Input ▸ Apply) más su número de
+    aparición, porque en Tabla 2 se repiten ("±2σ")."""
+    keys, seen = [], {}
+    for c in range(table.columnCount()):
+        it = table.horizontalHeaderItem(c)
+        h = it.text() if it is not None else ""
+        seen[h] = seen.get(h, 0) + 1
+        keys.append(f"{h}#{seen[h]}")
+    return keys
 
 
 class _PinCorner(QWidget):
@@ -8351,6 +9302,98 @@ class ReadOnlyDataTable(_AutoScrollDragMixin, QTableWidget):
 # QStyledItemDelegate que reciba el QPainter y dibuje libremente.
 # ─────────────────────────────────────────────────────────────────────────────
 from PyQt6.QtWidgets import QStyledItemDelegate, QStyle
+
+
+class _TexRowDrag(QObject):
+    """2026-10-26 (Guillermo): en la ventana Textures una fila se REORDENA
+    pulsándola y, sin soltar, arrastrándola a su lugar. El orden del catálogo
+    es el de los menús de Tabla 1, de las leyendas y de las combinaciones
+    (así los "Rim…" quedan juntos y los "Core…" juntos).
+
+    Filtro instalado en cada fila y en su casilla: un clic sin movimiento
+    sigue siendo un clic (marca o desmarca); pasado el umbral de arrastre de
+    Qt empieza el arrastre, una línea de acento marca dónde caerá, y el
+    soltar se COME (la casilla no cambia)."""
+
+    def __init__(self, mw, kind, holder):
+        super().__init__(holder)
+        self.mw, self.kind, self.holder = mw, kind, holder
+        self._press = None              # (widget, punto global)
+        self._row = None                # fila que se arrastra
+        self._line = None
+
+    def _rows(self):
+        lay = self.holder.layout()
+        out = []
+        for i in range(lay.count()):
+            w = lay.itemAt(i).widget()
+            if w is not None and w.property("texName"):
+                out.append(w)
+        return out
+
+    def _target_index(self, gpos):
+        y = self.holder.mapFromGlobal(gpos).y()
+        rows = self._rows()
+        for i, w in enumerate(rows):
+            if y < w.geometry().center().y():
+                return i, w.geometry().top()
+        if rows:
+            return len(rows), rows[-1].geometry().bottom() + 1
+        return 0, 0
+
+    def eventFilter(self, obj, ev):
+        t = ev.type()
+        if (t == QEvent.Type.MouseButtonPress
+                and ev.button() == Qt.MouseButton.LeftButton):
+            self._press = (obj, ev.globalPosition().toPoint())
+            return False
+        if t == QEvent.Type.MouseMove and self._press is not None:
+            gp = ev.globalPosition().toPoint()
+            if self._row is None:
+                if ((gp - self._press[1]).manhattanLength()
+                        < QApplication.startDragDistance()):
+                    return False
+                w = self._press[0]
+                while w is not None and not w.property("texName"):
+                    w = w.parentWidget()
+                if w is None:
+                    return False
+                self._row = w
+                w.setStyleSheet("background: rgba(10,132,255,0.10);"
+                                " border-radius: 4px;")
+                QApplication.setOverrideCursor(
+                    QCursor(Qt.CursorShape.ClosedHandCursor))
+                self._line = QFrame(self.holder)
+                self._line.setStyleSheet(
+                    f"background: {THEME['accent']}; border: none;")
+                self._line.show()
+            _i, y = self._target_index(gp)
+            self._line.setGeometry(0, max(0, y - 1), self.holder.width(), 2)
+            self._line.raise_()
+            return True
+        if t == QEvent.Type.MouseButtonRelease and self._press is not None:
+            obj0 = self._press[0]
+            self._press = None
+            if self._row is None:
+                return False
+            row, self._row = self._row, None
+            idx, _y = self._target_index(ev.globalPosition().toPoint())
+            QApplication.restoreOverrideCursor()
+            if self._line is not None:
+                self._line.setParent(None)
+                self._line.deleteLater()
+                self._line = None
+            try:
+                if hasattr(obj0, "setDown"):
+                    obj0.setDown(False)
+                row.setStyleSheet("background: transparent;")
+            except RuntimeError:
+                pass
+            name = row.property("texName")
+            QTimer.singleShot(0, lambda: self.mw._reorder_texture(
+                self.kind, name, idx))
+            return True                 # el soltar no marca la casilla
+        return False
 
 
 class _ResultsWindow(QWidget):
@@ -10295,7 +11338,7 @@ ZIRCLOCK_FORMAT_VERSION = 6
 
 # §Ola8: versión visible del SOFTWARE (distinta del format_version del archivo).
 # Se muestra en About ▸ Version & credits (y será útil para el empaquetado, Ola 10).
-ZIRCLOCK_VERSION = "3.0"
+ZIRCLOCK_VERSION = "3.1"
 
 
 def _zirclock_json_default(o):
@@ -10353,6 +11396,9 @@ _P5_PROFILE_PREFIX = {
     "concordia_style": "concordia_", "wmean_style": "wmean_",
     "kde_style": "kde_", "hf_style": "hf_", "biv_style": "biv_",
     "me_style": "me_", "tect_style": "tect_",
+    # 2026-10-24: el boxplot de Ti también tiene "Per sample" (§39); §148 lo
+    # dejó fuera porque su modo no es un entero (`tibox_primary`).
+    "tibox_style": "tibox_",
 }
 # Claves de esas familias que NO son de la muestra: las que ELIGEN la muestra
 # o el diagrama, la lista del modo combinado y todo el side-by-side (que es
@@ -10360,7 +11406,7 @@ _P5_PROFILE_PREFIX = {
 _P5_PROFILE_SKIP = frozenset({
     "concordia_space", "concordia_sbs_on", "kde_diagram",
     "kde_radial_sample", "hf_plot_type", "biv_x", "biv_y", "biv_stack_on",
-    "biv_stack_ys", "tect_diagram",
+    "biv_stack_ys", "tect_diagram", "tibox_primary",
 })
 
 
@@ -10830,6 +11876,13 @@ def _p5_view_key_for(p5cfg, style_key, variant_override=None):
         # El Stacked y la matriz son de varias muestras (paso 8).
         if style_key == "kde_style" and var in ("stacked", "matrix"):
             sample = "__all__"
+    # 2026-10-24 (reporte de Guillermo con SJC): el boxplot de Ti también
+    # tiene "Per sample" (§39, `tibox_primary`, que no es un modo entero y
+    # por eso quedó fuera de _P5_VIEW_SAMPLE_KEYS). Con UNA vista para todas
+    # las muestras, el título editado a mano en 33b ("… — 33b") seguía
+    # encima del gráfico de 13b, y con él la leyenda, los ejes y el 🔒.
+    if style_key == "tibox_style" and cfg.get("tibox_primary") == "per_sample":
+        sample = str(cfg.get("tibox_sample", "") or "") or "__all__"
     if (variant_override is None and style_key == "kde_style"
             and var == "stacked"):
         var += _version_view_suffix(cfg, "stacked")      # paso 10
@@ -10881,6 +11934,41 @@ def _migrate_p5_views_v4(p5cfg):
                 vk = (vk_now if var is None
                       else _p5_view_key_for(p5cfg, sk, variant_override=var))
                 _entry(vk).setdefault("label_pos", {})[key] = pos
+
+
+def _migrate_tibox_sample_views(p5cfg, sample_names):
+    """2026-10-24: el boxplot de Ti pasa a tener una vista por muestra en
+    "Per sample" (ver _p5_view_key_for). Hasta hoy todas compartían
+    "main@__all__", así que esa vista ES la que el usuario veía en cada
+    muestra: se COPIA a la de cada una que aún no tenga la suya (nada cambia
+    a la vista al reabrir). Excepción: un título que nombra a OTRA muestra y
+    no a esta (el "… — 33b" de SJC) no se copia — esa muestra recupera el
+    suyo de fábrica. Corre una sola vez por proyecto (`_tibox_sample_views`;
+    sin el prefijo "tibox_", que lo haría viajar con cada perfil)."""
+    import copy
+    import re
+    if not isinstance(p5cfg, dict) or p5cfg.get("_tibox_sample_views"):
+        return
+    p5cfg["_tibox_sample_views"] = True
+    st = p5cfg.get("tibox_style")
+    views = st.get("views") if isinstance(st, dict) else None
+    base = (views or {}).get("main@__all__")
+    if not isinstance(base, dict) or not base:
+        return
+    names = [str(n) for n in sample_names if n]
+
+    def _names_in(text):
+        return {n for n in names if re.search(
+            r"(?<![\w-])" + re.escape(n) + r"(?![\w-])", text)}
+    for n in names:
+        vk = f"main@{n}"
+        if vk in views:
+            continue
+        v = copy.deepcopy(base)
+        _t = v.get("title")
+        if isinstance(_t, str) and _names_in(_t) - {n} and n not in _names_in(_t):
+            v.pop("title", None)
+        views[vk] = v
 
 
 def _mc_to_hex_dark(hex_color, k=0.65):
@@ -11948,6 +13036,9 @@ def _restore_project(d, file_version=None):
         _migrate_sbs_own_content(proj["panel5_config"])
         _ensure_kde_stack_own(proj["panel5_config"])     # paso 8
         _purge_legacy_text_edits(proj["panel5_config"])
+        _migrate_tibox_sample_views(
+            proj["panel5_config"],
+            [s.get("name") for s in (d.get("samples") or [])])
     for s in (d.get("samples") or []):
         rows = []
         for r in (s.get("rows") or []):
@@ -11970,6 +13061,9 @@ def _restore_project(d, file_version=None):
         proj["dynamic_cols"].append((c[0], c[1], wi))
     for g in (d.get("dynamic_groups") or []):
         proj["dynamic_groups"].append((g[0], list(g[1])))
+    # M16: catálogo de texturas 1 → 2 (nombres, descripciones, dos nuevas).
+    # Aquí, con las celdas y las columnas ya reconstruidas.
+    _migrate_texture_catalog_v2(proj)
     return proj
 
 
@@ -12296,6 +13390,12 @@ class _P5InlineTextEditor(QPlainTextEdit):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        # M11: los rótulos de los íconos se leen ANTES de armar los paneles.
+        try:
+            _P5_BTN_LABELS["on"] = bool(_app_settings().value(
+                "button_labels", True, type=bool))
+        except Exception:
+            _P5_BTN_LABELS["on"] = True
         # Rebranding "ZirClock" (item 1): el nombre + la leyenda institucional
         # (item 4) viven ahora en el TÍTULO de la ventana — la banda negra
         # (setup_header) se eliminó (item 3). El título muestra además el archivo
@@ -12459,6 +13559,7 @@ class MainWindow(QMainWindow):
         # §(1) "fijar Analysis ID": re-aplicar tras reconstruir (sigue al modelo).
         self._apply_pinned_id_header(
             self.data_table, getattr(self, "_pin_id_t1", False))
+        self._apply_manual_col_widths(self.data_table, "t1")     # M20
         # §37: nº de análisis por muestra en la lista de Panel 1.
         self._refresh_sample_counts()
         # 2026-09-30: los grupos sin datos se pliegan solos (cambian con un
@@ -12508,6 +13609,50 @@ class MainWindow(QMainWindow):
             _gh = getattr(self, "group_header", None)
             if _gh is not None:
                 _gh.update()
+
+    # ── M20 (2026-10-24, Guillermo): anchos de columna hechos A MANO ───────
+    # Se perdían al reabrir (nadie los guardaba) y también con el zoom de la
+    # tabla, que reaplica sus anchos "base". Viven en `_manual_col_widths`
+    # {"t1"|"t2": {clave de columna: ancho sin zoom}} y viajan en ui_state.
+    def _watch_manual_col_widths(self, table, key):
+        hdr = table.horizontalHeader()
+        hdr._p_user_drag = False
+        hdr._p_drag_watch = _HeaderDragWatch(hdr)
+        hdr.viewport().installEventFilter(hdr._p_drag_watch)
+        hdr.sectionResized.connect(
+            lambda c, _old, new, _t=table, _k=key:
+                self._on_manual_col_resized(_t, _k, c, new))
+
+    def _on_manual_col_resized(self, table, key, col, new_w):
+        if not getattr(table.horizontalHeader(), "_p_user_drag", False):
+            return
+        keys = _t_col_width_keys(table)
+        if not 0 <= col < len(keys):
+            return
+        z = float(getattr(table, "_zoom_factor", 1.0) or 1.0)
+        base = int(round(new_w / z))
+        self.__dict__.setdefault("_manual_col_widths", {}).setdefault(
+            key, {})[keys[col]] = base
+        bw = getattr(table, "_base_column_widths", None)
+        if isinstance(bw, list) and col < len(bw):
+            bw[col] = base                  # que el zoom también lo respete
+
+    def _apply_manual_col_widths(self, table, key):
+        """Tras reconstruir o repintar una tabla: sus anchos hechos a mano."""
+        saved = (getattr(self, "_manual_col_widths", None) or {}).get(key)
+        if not saved:
+            return
+        z = float(getattr(table, "_zoom_factor", 1.0) or 1.0)
+        stubs = getattr(table, "_fold_stub_cols", ()) or ()
+        bw = getattr(table, "_base_column_widths", None)
+        for c, k in enumerate(_t_col_width_keys(table)):
+            if k not in saved or c in stubs:      # (franja de grupo plegado)
+                continue
+            base = int(saved[k])
+            if table.columnWidth(c) != max(8, round(base * z)):
+                table.setColumnWidth(c, max(8, round(base * z)))
+            if isinstance(bw, list) and c < len(bw):
+                bw[c] = base
 
     def _on_pin_id_t1_toggled(self, checked):
         """Toggle "fijar Analysis ID" de Tabla 1 (independiente de Tabla 2)."""
@@ -12723,7 +13868,8 @@ class MainWindow(QMainWindow):
 
     # Ola 17 · L17: las columnas de textura de Tabla 1 que Tabla 2 refleja
     # (encabezado, ancho) y las opciones del ⚙ que nacen ENCENDIDAS.
-    _T2_TEXTURE_COLS = (("Position", 70), ("Texture\nType", 90))
+    _T2_TEXTURE_COLS = (("Grain shape", 80), ("Position", 70),   # (M18)
+                        ("Texture\nType", 90))
     _T2_DISPLAY_DEFAULTS = {"t2_show_set": True, "t2_show_textures": True}
 
     def _t2_set_display(self, key, on):
@@ -12889,6 +14035,7 @@ class MainWindow(QMainWindow):
             self.calc_table.setColumnHidden(_c, not _upb)
         self._apply_pinned_id_header(
             self.calc_table, getattr(self, "_pin_id_t2", False))
+        self._apply_manual_col_widths(self.calc_table, "t2")     # M20
 
         if mirror:
             # Reconstruir Tabla 1 con el nuevo orden de filas. rebuild_table marca
@@ -12989,7 +14136,30 @@ class MainWindow(QMainWindow):
     # regla se guarda en el set (`rule`) → persiste en el .zirclock y pre-llena el
     # diálogo. Reemplaza el viejo _open_assign_sets_dialog (global, con su propio
     # selector de muestra que CHOCABA con el editor de scope).
-    def _apply_all_set_rules(self):
+    def _set_rule_captures(self, entry, rule, vcache, tex_vals):
+        """¿La regla del set captura al análisis? M19 (2026-10-25): una regla
+        puede tener un RANGO de un valor (`key`, `min`, `max`), unas TEXTURAS
+        (`textures`: lista de combinaciones nivel → nombre; basta UNA — se
+        suman) o las dos, y entonces el grano debe cumplir LAS DOS
+        (decisión de Guillermo). `vcache`: valores ya leídos de este análisis;
+        `tex_vals`: su (forma, posición, textura)."""
+        k = rule.get("key")
+        pats = rule.get("textures") or []
+        if not k and not pats:
+            return False
+        if k:
+            if k not in vcache:
+                vcache[k] = self._calc_sort_value(entry, k)
+            v = vcache[k]
+            lo, hi = rule.get("min"), rule.get("max")
+            if (v is None or (lo is not None and v < lo)
+                    or (hi is not None and v > hi)):
+                return False
+        if pats and not any(_combo_matches(tex_vals, p) for p in pats):
+            return False
+        return True
+
+    def _apply_all_set_rules(self, auto=False):
         """Aplica TODAS las reglas de rango de los sets a la vez (al confirmar
         Manage Sets, 2026-07-12). Por grano se le asigna el set cuya regla lo
         captura (valor en [min,max]) Y cuya muestra está en el scope del set. Si
@@ -13004,27 +14174,39 @@ class MainWindow(QMainWindow):
         granos que están en él y ya no la cumplen (p.ej. al achicar el rango)
         vuelven a Unassigned; antes se quedaban pegados. Los traslapes se
         avisan ANTES, dentro de Manage Sets (`_set_rule_conflicts`), y la
-        prioridad es el orden de la lista (↑↓)."""
+        prioridad es el orden de la lista (↑↓).
+
+        2026-10-24 (decisión de Guillermo: las reglas, "siempre vigentes"):
+        también corre SOLA tras cada recálculo (`auto=True`, desde
+        `calculate_table2`). Antes solo corría al dar OK en Manage Sets, así
+        que una muestra importada, fusionada o activada DESPUÉS de definir el
+        set se quedaba fuera de su regla — en SJC, 13b llegó después de
+        "Metamorphic" (alcance: todas) y sus 37 granos de 900–1000 Ma nunca
+        tuvieron set. Con `auto` devuelve el aviso para la barra de estado
+        ("" si ninguna celda cambió) y solo reconstruye la tabla si cambió
+        alguna."""
         proj = self.projects.get(self.current_project)
         if not proj:
-            return
+            return "" if auto else None
         rules = [(s, s["rule"]) for s in proj.get("sets", []) if s.get("rule")]
         if not rules:
-            return
+            return "" if auto else None
         set_col = None
         for i, (h, _, _) in enumerate(self.data_table.dynamic_cols):
             if h == "Set":
                 set_col = len(UPB_COLUMNS) + i
                 break
         if set_col is None:
-            return
-        if self._calc_stale_now():
+            return "" if auto else None
+        if not auto and self._calc_stale_now():
             self.calculate_table2()
         if not getattr(self, "calc_results", None):
-            return
+            return "" if auto else None
         samples_by_name = {s["name"]: s for s in proj["samples"]}
         _rule_sets = {s["name"] for s, _r in rules}
+        _tcols = self._combo_cols()                       # M19
         n_assigned = n_conflict = n_released = 0
+        n_moved = 0               # celdas que de verdad cambiaron de set
         conflict_samples = set()
         for entry in self.calc_results:
             sample = samples_by_name.get(entry.get("sample_name"))
@@ -13036,17 +14218,11 @@ class MainWindow(QMainWindow):
             sname = sample["name"]
             matches = []          # sets (en orden de lista) que capturan el grano
             vcache = {}
+            _tv = self._texture_values_of(entry, _tcols)
             for s, rule in rules:
                 if not self._set_applies_to(s, sname):
                     continue      # el set no aplica a esta muestra
-                k = rule.get("key")
-                if k not in vcache:
-                    vcache[k] = self._calc_sort_value(entry, k)
-                v = vcache[k]
-                _lo, _hi = rule.get("min"), rule.get("max")
-                if (v is not None
-                        and (_lo is None or v >= _lo)
-                        and (_hi is None or v <= _hi)):
+                if self._set_rule_captures(entry, rule, vcache, _tv):
                     matches.append(s["name"])
             if not matches:
                 _cells = sample["rows"][ridx].setdefault("cells", {})
@@ -13057,17 +14233,31 @@ class MainWindow(QMainWindow):
             if len(matches) > 1:
                 n_conflict += 1
                 conflict_samples.add(sname)
-            sample["rows"][ridx].setdefault("cells", {})[set_col] = matches[0]
+            _cells = sample["rows"][ridx].setdefault("cells", {})
+            if str(_cells.get(set_col, "") or "") != matches[0]:
+                n_moved += 1
+            _cells[set_col] = matches[0]
             n_assigned += 1
+        if auto:
+            if not (n_moved or n_released):
+                return ""
+            self.rebuild_table(skip_capture=True)
+            _msg = (f"Set range rules: {n_moved} analysis(es) placed in the "
+                    "set whose rule captures them")
+            if n_released:
+                _msg += (f" · {n_released} outside their set's rule → "
+                         "Unassigned")
+            return (_msg + ". (A set with a rule is defined by it — "
+                    "edit the rule in Manage Sets.)")
         self.rebuild_table(skip_capture=True)
         # El traslape ya se avisó DENTRO de Manage Sets, antes de aplicar.
-        _msg = f"Set range rules applied: {n_assigned} analysis(es) assigned"
+        _msg = f"Set rules applied: {n_assigned} analysis(es) assigned"
         if n_released:
-            _msg += (f" · {n_released} no longer within their set's range "
+            _msg += (f" · {n_released} no longer within their set's rule "
                      "→ Unassigned")
         if n_conflict:
-            _msg += (f" · {n_conflict} in overlapping ranges went to the "
-                     "higher set in the list")
+            _msg += (f" · {n_conflict} captured by more than one rule went "
+                     "to the higher set in the list")
         self.statusBar().showMessage(_msg + ".", 8000)
 
     def _set_rule_conflicts(self, sets):
@@ -13079,58 +14269,79 @@ class MainWindow(QMainWindow):
         out = {}
         if len(rules) < 2:
             return out
+        _tcols = self._combo_cols()                       # M19
         for entry in (getattr(self, "calc_results", None) or []):
             if entry.get("invalid_reason"):
                 continue
             sname = entry.get("sample_name")
             hits, vcache = [], {}
+            _tv = self._texture_values_of(entry, _tcols)
             for g, rule in rules:
                 if not self._set_applies_to(g, sname):
                     continue
-                k = rule.get("key")
-                if k not in vcache:
-                    vcache[k] = self._calc_sort_value(entry, k)
-                v = vcache[k]
-                lo, hi = rule.get("min"), rule.get("max")
-                if (v is not None and (lo is None or v >= lo)
-                        and (hi is None or v <= hi)):
+                if self._set_rule_captures(entry, rule, vcache, _tv):
                     hits.append(g["name"])
             if len(hits) > 1:
                 out[tuple(hits)] = out.get(tuple(hits), 0) + 1
         return out
 
     def _edit_set_rule_dialog(self, sdict):
-        """Diálogo por-set: parámetro + [min,max] (pre-llenado desde la regla).
+        """Diálogo por-set: la REGLA del set (pre-llenada desde la que tenga).
         SOLO GUARDA la regla en `sdict` (no toca celdas); la asignación ocurre al
         confirmar Manage Sets (_apply_all_set_rules). Devuelve True si se guardó.
-        Calcula si nunca se calculó (para poblar la lista de parámetros)."""
+        Calcula si nunca se calculó (para poblar la lista de parámetros).
+
+        M19 (2026-10-25, maqueta aprobada por Guillermo): dos partes que se
+        pueden usar por separado o juntas — "By a value range" (parámetro +
+        [min, max], la de siempre) y "By texture": una o varias combinaciones
+        forma ▸ posición ▸ textura, cada nivel con "Any", que se SUMAN (un
+        grano con cualquiera de ellas entra). Con las dos encendidas, el grano
+        debe cumplir LAS DOS."""
         if not self.current_project:
             return False
         if not getattr(self, "calc_results", None):
             self.calculate_table2()      # poblar el catálogo de parámetros
         keys = self._numeric_model_keys(include_trace=True)
-        if not keys:
+        _tcols = self._combo_cols()
+        tex_levels = [l for l in _COMBO_LEVELS if _tcols.get(l) is not None]
+        if not keys and not tex_levels:
             self.statusBar().showMessage(
-                "Range rule: no numeric column with data yet.", 5000)
+                "Set rule: no numeric or texture column with data yet.", 5000)
             return False
         rule = sdict.get("rule") or {}
+        _pats0 = [dict(p) for p in (rule.get("textures") or [])
+                  if isinstance(p, dict)]
 
         dlg = QDialog(self)
-        dlg.setWindowTitle(f"Range rule — {sdict['name']}")
+        dlg.setWindowTitle(f"Set rule — {sdict['name']}")
         dlg.setStyleSheet(STYLE)
         lay = QVBoxLayout(dlg)
         lay.setContentsMargins(14, 14, 14, 14); lay.setSpacing(10)
         _hint = QLabel(
-            f"Grains of '{sdict['name']}' whose value for the chosen parameter "
-            "falls in [min, max] will be assigned to this set — within its scope "
-            "— when you press OK in Manage Sets. Grains outside the range keep "
-            "their current / manual assignment.\n\nLeave one end EMPTY for an "
-            "open range: a min of 3 with no max means '3 or more'.")
+            f"Grains that meet this rule are assigned to '{sdict['name']}' — "
+            "within its scope — when you press OK in Manage Sets, and grains "
+            "that stop meeting it go back to Unassigned. Grains the rule "
+            "never captured keep their manual assignment.")
         _hint.setWordWrap(True)
         _hint.setStyleSheet(
             "color:#2a4a6a; font-size:11px; background:transparent;")
         lay.addWidget(_hint)
 
+        # ── 1 · Rango de un valor ────────────────────────────────────────
+        rng_chk = QCheckBox("By a value range")
+        rng_chk.setStyleSheet("QCheckBox { font-weight: 600; }")
+        rng_chk.setChecked(bool(keys) and (bool(rule.get("key"))
+                                           or not _pats0))
+        rng_chk.setEnabled(bool(keys))
+        if not keys:
+            rng_chk.setToolTip("No numeric column with data yet.")
+        lay.addWidget(rng_chk)
+        rng_box = QWidget()
+        rng_box.setObjectName("ruleRngBox")
+        rng_box.setStyleSheet("#ruleRngBox { background: transparent; }")
+        _rl = QVBoxLayout(rng_box)
+        _rl.setContentsMargins(_DLG_STEP, 0, 0, 0)
+        _rl.setSpacing(6)
         _prow = QHBoxLayout()
         _prow.addWidget(QLabel("Parameter:"))
         pcombo = QComboBox()
@@ -13141,7 +14352,7 @@ class MainWindow(QMainWindow):
         if rule.get("key") in _pids:
             pcombo.setCurrentIndex(_pids.index(rule["key"]))
         _prow.addWidget(pcombo); _prow.addStretch()
-        lay.addLayout(_prow)
+        _rl.addLayout(_prow)
 
         _rr = QHBoxLayout()
         _rr.addWidget(QLabel("Range:"))
@@ -13155,7 +14366,128 @@ class MainWindow(QMainWindow):
             _mx.setText(f"{rule['max']:g}")
         _rr.addWidget(_mn); _rr.addWidget(QLabel("–")); _rr.addWidget(_mx)
         _rr.addStretch()
-        lay.addLayout(_rr)
+        _rl.addLayout(_rr)
+        _rng_hint = QLabel("Leave one end EMPTY for an open range: a min of 3 "
+                           "with no max means '3 or more'.")
+        _rng_hint.setWordWrap(True)
+        _rng_hint.setStyleSheet(_HINT_QSS)
+        _rl.addWidget(_rng_hint)
+        lay.addWidget(rng_box)
+
+        # ── 2 · Texturas (any of) ─────────────────────────────────────────
+        tex_chk = QCheckBox("By texture — any of these combinations")
+        tex_chk.setStyleSheet("QCheckBox { font-weight: 600; }")
+        tex_chk.setChecked(bool(tex_levels) and bool(_pats0))
+        tex_chk.setEnabled(bool(tex_levels))
+        if not tex_levels:
+            tex_chk.setToolTip("Requires the texture columns in Table 1: "
+                               "enable textures in the Textures window.")
+        lay.addWidget(tex_chk)
+        tex_box = QWidget()
+        tex_box.setObjectName("ruleTexBox")
+        tex_box.setStyleSheet("#ruleTexBox { background: transparent; }")
+        _tl = QVBoxLayout(tex_box)
+        _tl.setContentsMargins(_DLG_STEP, 0, 0, 0)
+        _tl.setSpacing(4)
+        # Encabezados de columna (un nivel por columna de Tabla 1).
+        _hdr = QHBoxLayout()
+        _hdr.setSpacing(6)
+        for lvl in tex_levels:
+            _h = QLabel(_COMBO_LEVEL_LABELS[lvl])
+            _h.setStyleSheet(_HINT_QSS)
+            _h.setMinimumWidth(150)
+            _hdr.addWidget(_h)
+        _hdr.addSpacing(30)
+        _hdr.addStretch()
+        _tl.addLayout(_hdr)
+        # Lo que ofrece cada nivel: Any + el catálogo + lo que haya en Tabla 1.
+        _present = {l: set() for l in _COMBO_LEVELS}
+        for e in (getattr(self, "calc_results", None) or []):
+            for j, v in enumerate(self._texture_values_of(e, _tcols)):
+                if v != _COMBO_EMPTY:
+                    _present[_COMBO_LEVELS[j]].add(v)
+        _opts = {}
+        for lvl in tex_levels:
+            names = [en["name"] for en in self._texture_entries(lvl)]
+            names += sorted(_present[lvl] - set(names))
+            _opts[lvl] = [_COMBO_ANY] + names
+        pat_v = QVBoxLayout()
+        pat_v.setSpacing(4)
+        _tl.addLayout(pat_v)
+        pat_rows = []              # [(row_widget, {lvl: combo})]
+
+        def _add_pat(p=None):
+            row = QWidget(tex_box)
+            row.setObjectName("rulePatRow")
+            row.setStyleSheet("#rulePatRow { background: transparent; }")
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(0, 0, 0, 0)
+            rl.setSpacing(6)
+            cbs = {}
+            for lvl in tex_levels:
+                cb = QComboBox()
+                cb.addItems(_opts[lvl])
+                self._apply_combo_style(cb, font_size=12)
+                cb.setMinimumWidth(150)
+                want = (p or {}).get(lvl, _COMBO_ANY)
+                k = cb.findText(want)
+                if k < 0 and want != _COMBO_ANY:   # nombre que ya no existe
+                    cb.addItem(want)
+                    k = cb.count() - 1
+                cb.setCurrentIndex(max(0, k))
+                rl.addWidget(cb)
+                cbs[lvl] = cb
+            rm = QPushButton("−")
+            rm.setObjectName("smallBtn")
+            rm.setFixedWidth(26)
+            rm.setStyleSheet("QPushButton#smallBtn { padding: 2px 0; }")
+            rm.setToolTip("Remove this combination")
+            rl.addWidget(rm)
+            rl.addStretch()
+            pat_v.addWidget(row)
+            ent = (row, cbs)
+            pat_rows.append(ent)
+
+            def _rm():
+                if ent in pat_rows:
+                    pat_rows.remove(ent)
+                row.setParent(None)
+                row.deleteLater()
+                if not pat_rows:
+                    _add_pat()
+            rm.clicked.connect(_rm)
+
+        for p in (_pats0 or [None]):
+            _add_pat(p)
+        _addb = QPushButton("+ Add combination")
+        _addb.setObjectName("smallBtn")
+        _addb.clicked.connect(lambda *_a: _add_pat())
+        _ab = QHBoxLayout()
+        _ab.addWidget(_addb)
+        _ab.addStretch()
+        _tl.addLayout(_ab)
+        _tex_hint = QLabel("A grain with ANY of these combinations meets "
+                           "this part. 'Any' = whatever value it has, even "
+                           "none.")
+        _tex_hint.setWordWrap(True)
+        _tex_hint.setStyleSheet(_HINT_QSS)
+        _tl.addWidget(_tex_hint)
+        lay.addWidget(tex_box)
+
+        _both = QLabel("With both on, a grain enters this set only if it "
+                       "meets the range AND one of the texture combinations.")
+        _both.setWordWrap(True)
+        _both.setStyleSheet(
+            "color:#2a4a6a; font-size:11px; background:transparent;")
+        lay.addWidget(_both)
+
+        def _sync(*_a):
+            rng_box.setEnabled(rng_chk.isChecked())
+            tex_box.setEnabled(tex_chk.isChecked())
+            _both.setVisible(rng_chk.isChecked() and tex_chk.isChecked())
+        rng_chk.toggled.connect(_sync)
+        tex_chk.toggled.connect(_sync)
+        _sync()
 
         # El error se dice AQUÍ, no en la barra de estado: el mensaje de 5 s
         # pasaba inadvertido y la regla parecía "guardarse y desaparecer"
@@ -13167,13 +14499,13 @@ class MainWindow(QMainWindow):
         lay.addWidget(_err)
 
         _btns = QHBoxLayout(); _btns.addStretch()
-        # "Clear rule" quita la regla del set (deja de asignar por rango).
+        # "Clear rule" quita la regla del set (deja de asignar por regla).
         _clear = QPushButton("Clear rule"); _clear.setObjectName("smallBtn")
         _cancel = QPushButton("Cancel"); _cancel.setObjectName("smallBtn")
         _cancel.clicked.connect(dlg.reject)
         _ok = QPushButton("Save"); _ok.setObjectName("actionBtn")
         _cleared = [False]
-        _parsed = [None]          # (min|None, max|None) ya validado
+        _parsed = [None]          # la regla ya validada
 
         def _fail(msg):
             _err.setText(msg); _err.show()
@@ -13181,19 +14513,39 @@ class MainWindow(QMainWindow):
         def _try_accept():
             """Valida ANTES de cerrar: si algo está mal el diálogo se queda
             abierto con el aviso y el usuario no pierde lo que escribió."""
-            _a, _b = _mn.text().strip(), _mx.text().strip()
-            if not _a and not _b:
-                return _fail("Enter at least one limit — leave the other empty "
-                             "for an open range.")
-            try:
-                lo = float(_a) if _a else None
-                hi = float(_b) if _b else None
-            except ValueError:
-                return _fail("Min and max must be numbers (or empty for "
-                             "'no limit'). Type the number only — '3', not 'max'.")
-            if lo is not None and hi is not None and lo > hi:
-                lo, hi = hi, lo
-            _parsed[0] = (lo, hi)
+            if not rng_chk.isChecked() and not tex_chk.isChecked():
+                return _fail("Choose a range, textures or both — or press "
+                             "'Clear rule' to remove the rule.")
+            out = {}
+            if rng_chk.isChecked():
+                _a, _b = _mn.text().strip(), _mx.text().strip()
+                if not _a and not _b:
+                    return _fail("Enter at least one limit — leave the other "
+                                 "empty for an open range.")
+                try:
+                    lo = float(_a) if _a else None
+                    hi = float(_b) if _b else None
+                except ValueError:
+                    return _fail("Min and max must be numbers (or empty for "
+                                 "'no limit'). Type the number only — '3', "
+                                 "not 'max'.")
+                if lo is not None and hi is not None and lo > hi:
+                    lo, hi = hi, lo
+                out.update(key=keys[pcombo.currentIndex()][0], min=lo, max=hi)
+            if tex_chk.isChecked():
+                pats, seen = [], set()
+                for _row, cbs in pat_rows:
+                    p = {l: cb.currentText() for l, cb in cbs.items()
+                         if cb.currentText() != _COMBO_ANY}
+                    sig = tuple(sorted(p.items()))
+                    if p and sig not in seen:
+                        seen.add(sig)
+                        pats.append(p)
+                if not pats:
+                    return _fail("Choose at least one texture combination "
+                                 "with a value other than 'Any'.")
+                out["textures"] = pats
+            _parsed[0] = out
             dlg.accept()
         _ok.clicked.connect(_try_accept)
 
@@ -13211,9 +14563,7 @@ class MainWindow(QMainWindow):
             return True
         if _parsed[0] is None:           # Enter/atajo que aceptó sin validar
             return False
-        lo, hi = _parsed[0]
-        sdict["rule"] = {"key": keys[pcombo.currentIndex()][0],
-                         "min": lo, "max": hi}
+        sdict["rule"] = _parsed[0]
         return True
 
 
@@ -18090,7 +19440,8 @@ class MainWindow(QMainWindow):
         excluded = [e for e in targets if self._manual_exclusion_reason(e)]
         include_mode = bool(targets) and len(excluded) == len(targets)
         btn.setProperty("includeMode", include_mode)
-        self._p5_icon_btn(btn, "include" if include_mode else "exclude")
+        self._p5_icon_btn(btn, "include" if include_mode else "exclude",
+                          label="Include" if include_mode else "Exclude")
         if include_mode:
             btn.setToolTip(
                 "Include — bring the ticked analyses back into the weighted "
@@ -18943,6 +20294,15 @@ class MainWindow(QMainWindow):
         all_btn.clicked.connect(
             lambda _c=False, d=dlg: self._p5s_apply_to_all(d))
         row.addWidget(all_btn)
+        # 2026-10-24 (M9, Guillermo): de vuelta a fábrica, ejes incluidos.
+        reset_btn = QPushButton("Reset to defaults")
+        reset_btn.setObjectName("smallBtn")
+        reset_btn.setToolTip(
+            "Give this sample the factory settings — everything, axes, legend "
+            "position, edited texts and annotations included.")
+        reset_btn.clicked.connect(
+            lambda _c=False, d=dlg: self._p5s_reset_defaults(d))
+        row.addWidget(reset_btn)
         row.addStretch(1)
         lay.addWidget(blk)
         sc.update(blk=blk, lbl=lbl)
@@ -19039,6 +20399,49 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"Settings of {self._p5s_scope_name(cur)} applied to "
             f"{len(others)} sample(s).", 6000)
+
+    def _p5s_reset_defaults(self, dlg):
+        """"Reset to defaults" (2026-10-24, M9): la muestra (o el combinado)
+        vuelve a los valores de FÁBRICA — como una muestra recién agregada,
+        que nace sin perfil (§148) — y pierde también sus vistas: ejes, 🔒,
+        leyenda colocada, textos editados y anotaciones (decisión de
+        Guillermo: "todo", como Copy from). En el combinado se respetan las
+        vistas de las VERSIONES del side-by-side y del Stacked (§152), que no
+        son de este perfil."""
+        st = dlg._p5s
+        sk = st.get("style_key")
+        cfg = self._p5_cfg()
+        self._p5_profile_sync(sk, cfg)
+        cur = (cfg.get("_profile_on") or {}).get(sk)
+        if not cur:
+            return
+        r = QMessageBox.question(
+            dlg, "Reset to defaults",
+            f"Give “{self._p5s_scope_name(cur)}” the factory settings?\n"
+            "Its axes, legend position, edited texts and annotations are "
+            "reset too. Unapplied changes in this window are discarded.")
+        if r != QMessageBox.StandardButton.Yes:
+            return
+        profs = cfg.setdefault("sample_profiles", {}).setdefault(sk, {})
+        profs.pop(cur, None)
+        self._p5_profile_load(cfg, sk, None)
+        profs[cur] = self._p5_profile_capture(cfg, sk)
+        views = ((cfg.get(sk) or {}).get("views") or {}) \
+            if isinstance(cfg.get(sk), dict) else {}
+        for vk in list(views):
+            var, _at, samp = str(vk).partition("@")
+            if not _at or samp != cur:
+                continue
+            if cur == "__all__" and var.startswith(("sbs", "stacked")):
+                continue
+            views.pop(vk, None)
+        self._mark_dirty()
+        self._p5s_drop_body_cache(dlg)
+        self._p5s_rebuild(dlg)
+        self._p5s_replot_tab(sk)
+        self.statusBar().showMessage(
+            f"{self._p5s_scope_name(cur)}: back to the factory settings.",
+            6000)
 
     @staticmethod
     def _p5s_cache_key(shown):
@@ -19538,8 +20941,12 @@ class MainWindow(QMainWindow):
             _dirty_before = bool(getattr(self, "_dirty", False))
             _stale_before = bool(self.calc_results_stale)
             _in_changed = apply_input()
+            dlg._p4_extra_changed = False
             commit()
-            _cfg_changed = (cfg != _cfg_before)
+            # (2026-10-24: lo que el diálogo guarda FUERA de panel4_config —
+            # los parámetros de Ti por muestra — lo avisa con esta bandera.)
+            _cfg_changed = (cfg != _cfg_before
+                            or bool(getattr(dlg, "_p4_extra_changed", False)))
             # Guarda de NO-OP, con una sutileza medida: los cuatro diálogos de
             # configuración marcan el modelo como VIEJO siempre que escriben,
             # hayan cambiado algo o no. Si su config quedó idéntica, el modelo
@@ -20008,7 +21415,8 @@ class MainWindow(QMainWindow):
                     ])
 
         if self.textures_check.isChecked():
-            headers.update(["Position", "Texture\nType"])   # siempre (2026-09-30)
+            headers.update(["Grain shape", "Position",         # siempre
+                            "Texture\nType"])                  # (2026-09-30)
 
         return headers
 
@@ -20129,6 +21537,13 @@ class MainWindow(QMainWindow):
         self._mark_dirty()          # 7a: editar Tabla 1 ⇒ cambios sin guardar
         col = item.column()
         n_fixed = len(UPB_COLUMNS)
+        # M20 (2026-10-24): con el Pin ID encendido, la clave fijada de la
+        # fila sigue a su Analysis ID editado (solo se ponía al reconstruir).
+        if col == 1 and getattr(self, "_pin_id_t1", False):
+            _hi = self.data_table.verticalHeaderItem(item.row())
+            if _hi is not None and _hi.text() != item.text():
+                _hi.setText(item.text())
+                _hi.setToolTip(item.text())
 
         # Determinar si la columna requiere validación numérica
         is_numeric = False
@@ -20557,6 +21972,14 @@ class MainWindow(QMainWindow):
         constantes se resuelven UNA vez a nivel de módulo.
         """
         if event.type() == _EV_MOUSE_PRESS:
+            # 2026-10-24 (M14, Guillermo): un clic DENTRO de una ventana
+            # emergente — la lista de una celda de Tabla 1, un menú
+            # contextual — no es un "clic fuera". Se decidía por la POSICIÓN:
+            # con la lista de una de las últimas filas encima de Tabla 2, el
+            # clic caía fuera del rectángulo de Tabla 1, se apagaba su celda
+            # activa y eso cerraba el editor ANTES de elegir la opción.
+            if QApplication.activePopupWidget() is not None:
+                return super().eventFilter(obj, event)
             # Posición del click en coordenadas globales (pantalla)
             global_pos = event.globalPosition().toPoint()
 
@@ -21138,8 +22561,11 @@ class MainWindow(QMainWindow):
             # 2026-10-08 (Guillermo): quienes prueban el programa con sus
             # datos y aportan la retroalimentación científica. Como
             # colaboradores, no como autores (ver el expediente de §7).
-            "<p><b>Beta testers:</b> Dr. Luigi A. Solari · Dr. Carlos "
-            "Ortega-Obregón</p>"
+            # 2026-10-26: "Early reviewers" (más amable que "Beta testers",
+            # pedido de Guillermo) y Víctor Leal Cuellar, que lo ha probado
+            # mucho.
+            "<p><b>Early reviewers:</b> Dr. Luigi A. Solari · Dr. Carlos "
+            "Ortega-Obregón · Víctor Leal Cuellar</p>"
             # 2026-10-19 (v3.0): GPL-3.0-or-later, decidida con la oficina de
             # derechos de autor. Este renglón es el "aviso legal apropiado"
             # que la GPL pide a un programa interactivo (sección 0): derechos,
@@ -21180,7 +22606,8 @@ class MainWindow(QMainWindow):
         Guillermo Espejo Bautista ·
         <a style="color:{accent};" href="mailto:gespejo@geociencias.unam.mx">gespejo@geociencias.unam.mx</a><br>
         <a style="color:{accent};" href="https://orcid.org/0000-0001-9206-5108">ORCID 0000-0001-9206-5108</a><br>
-        Beta testers: Dr. Luigi A. Solari · Dr. Carlos Ortega-Obregón
+        Early reviewers: Dr. Luigi A. Solari · Dr. Carlos Ortega-Obregón ·
+        Víctor Leal Cuellar
         </p>
 
         <p>{self._app_name} is a desktop application for <b>zircon
@@ -21316,6 +22743,13 @@ class MainWindow(QMainWindow):
         self._rail_action.setShortcut(QKeySequence("Ctrl+Alt+B"))
         self._rail_action.toggled.connect(self._set_side_rail_visible)
         view_menu.addAction(self._rail_action)
+        # M11 (2026-10-25): rótulos bajo los íconos de Panel 5 y las tablas.
+        # (En View y no en el menú ZirClock, por la misma razón que el riel.)
+        self._labels_action = QAction("Show button labels", self)
+        self._labels_action.setCheckable(True)
+        self._labels_action.setChecked(_P5_BTN_LABELS["on"])
+        self._labels_action.toggled.connect(self._set_button_labels)
+        view_menu.addAction(self._labels_action)
         view_menu.addSeparator()
         self._panel_actions = {}
         for _k, _name in (("admin", "Projects and samples"),
@@ -21390,6 +22824,10 @@ class MainWindow(QMainWindow):
         refvals_action = QAction("Reference values && constants", self)
         refvals_action.triggered.connect(self._show_reference_values_dialog)
         help_menu.addAction(refvals_action)
+        # M16 (2026-10-25): el catálogo ilustrado de texturas.
+        atlas_action = QAction("Zircon textures", self)
+        atlas_action.triggered.connect(lambda *_a: self._open_texture_atlas())
+        help_menu.addAction(atlas_action)
 
         about_menu = menubar.addMenu("About")
         about_action = QAction(f"About {self._app_name}", self)
@@ -22400,12 +23838,34 @@ class MainWindow(QMainWindow):
         # preferencia del proyecto, no de la sesión → viaja aquí, junto al
         # layout y a la pestaña activa de Panel 5.
         st["t2_hide_failed"] = bool(getattr(self, "_t2_hide_failed", False))
+        # 2026-10-24 (M20, Guillermo): el Pin ID de cada tabla y los anchos
+        # de columna hechos a mano tampoco sobrevivían a reabrir.
+        st["pin_ids"] = {"t1": bool(getattr(self, "_pin_id_t1", False)),
+                         "t2": bool(getattr(self, "_pin_id_t2", False))}
+        import copy as _cp
+        st["col_widths"] = _cp.deepcopy(
+            getattr(self, "_manual_col_widths", None) or {})
+        if getattr(self, "_tex_sum_levels", None) is not None:      # M17
+            st["tex_summary_levels"] = list(self._tex_sum_levels)
         return st
 
     def _apply_ui_state(self, st, layout_only=False):
         """Restaura un snapshot de _capture_ui_state. TOLERANTE: claves
         ausentes o mal formadas se ignoran (proyecto viejo sin ui_state =
         comportamiento actual, cero regresión)."""
+        if not layout_only:
+            # M20: los anchos hechos a mano son del proyecto que ENTRA (sin
+            # ui_state, ninguno — no se cuelan los del proyecto anterior).
+            _cw = (st or {}).get("col_widths") if isinstance(st, dict) else None
+            self._manual_col_widths = {
+                k: {str(h): int(w) for h, w in (v or {}).items()
+                    if isinstance(w, (int, float)) and w > 0}
+                for k, v in (_cw.items() if isinstance(_cw, dict) else ())
+                if k in ("t1", "t2") and isinstance(v, dict)}
+            for _tk, _ta in (("t1", "data_table"), ("t2", "calc_table")):
+                if getattr(self, _ta, None) is not None:
+                    self._apply_manual_col_widths(getattr(self, _ta), _tk)
+            self._tex_sum_levels = None          # M17 (los lee abajo)
         if not isinstance(st, dict):
             return
         spl = st.get("splitters") or {}
@@ -22500,6 +23960,20 @@ class MainWindow(QMainWindow):
             self._t2_hide_failed = want
             self._apply_t2_row_visibility()
             self._refresh_t2_status()
+        # M20: Pin ID de cada tabla. Ausente (proyecto de antes) = se deja
+        # como esté. El toggled del botón aplica el encabezado.
+        _pins = st.get("pin_ids")
+        if isinstance(_pins, dict):
+            for _k, _attr in (("t1", "_pin_id_t1_chk"),
+                              ("t2", "_pin_id_t2_chk")):
+                _b = getattr(self, _attr, None)
+                if _b is not None and isinstance(_pins.get(_k), bool):
+                    _b.setChecked(_pins[_k])
+        # M17: los niveles de la pestaña Textures de Σ (None = automáticos).
+        if not layout_only and hasattr(self, "_tex_sum_checks"):
+            _tl = st.get("tex_summary_levels")
+            self._tex_sum_levels = ([l for l in _tl if l in _COMBO_LEVELS]
+                                    if isinstance(_tl, list) else None)
 
     def _sync_current_project_state(self):
         """Vuelca el estado VIVO (Tabla 1 + configs Panel 2/4) al dict del
@@ -23413,6 +24887,8 @@ class MainWindow(QMainWindow):
                 self._export_ti_sheet(wb.create_sheet("Ti"))
             if cc.get("hf_col_map"):     # 2026-09-30: si hay datos Hf
                 self._export_hf_sheet(wb.create_sheet("Hf"))
+            if any(c is not None for c in self._combo_cols().values()):
+                self._export_textures_sheet(wb.create_sheet("Textures"))
             wb.save(path)
         except Exception as e:
             QMessageBox.critical(self, "Export failed",
@@ -23420,6 +24896,31 @@ class MainWindow(QMainWindow):
             return
         self.statusBar().showMessage(
             f"Exported to '{os.path.basename(path)}'.", 8000)
+
+    def _export_textures_sheet(self, ws):
+        """M17: hoja 'Textures' — la misma tabla de la pestaña Textures de la
+        ventana de resultados, con sus mismos niveles."""
+        levels = self._tex_summary_levels()
+        tab = self._combo_summary_table(levels)
+        if tab is None:
+            return
+        samples, rows, col_tot, grand = tab
+        title = _COMBO_SEP.join(_COMBO_LEVEL_LABELS[l] for l in levels)
+        self._export_write_header(ws, [title] + [str(s) for s in samples]
+                                  + ["Total"])
+        r = 2
+        for lab, ns, tot in rows:
+            self._export_write_row(ws, r, [lab] + list(ns) + [tot])
+            r += 1
+        from openpyxl.styles import Font
+        self._export_write_row(ws, r, ["Total"] + list(col_tot) + [grand])
+        for j in range(1, len(samples) + 3):
+            ws.cell(row=r, column=j).font = Font(bold=True)
+        ws.cell(row=r + 2, column=1,
+                value=f"Analyses (spots), not grains. {_COMBO_EMPTY} = no "
+                      "value in that column; invalid rows are not counted.")
+        ws.column_dimensions["A"].width = max(
+            14, min(60, max([len(title)] + [len(x[0]) for x in rows]) + 2))
 
     def _export_write_header(self, ws, headers):
         """Fila 1 = encabezados en negrita, congelada (freeze debajo)."""
@@ -24073,6 +25574,7 @@ class MainWindow(QMainWindow):
             "neg_values_mode": 0,                 # Replace with 0
 
             "textures_active": False,
+            "textures_shapes": {},                # M18: forma del grano
             "textures_positions": {},
             "textures_types": {},
 
@@ -24207,6 +25709,9 @@ class MainWindow(QMainWindow):
             # inclusión de rutilo, etc.), sobre los valores de T. n-σ iterativo
             # sobre la σ poblacional del bucket. Independiente del gate U-Pb.
             "ti_reject_outliers": False,
+            # M5: "+ also exclude chemical outliers (Ti)" (U-Pb ▸ Age
+            # discrimination); solo vale con ti_reject_outliers.
+            "exclude_ti_outliers": False,
             "ti_outlier_k": 2.0,                       # k para n-σ poblacional
         }
 
@@ -24283,6 +25788,10 @@ class MainWindow(QMainWindow):
             "neg_values_mode": self.neg_values_radio_group.checkedId(),
 
             "textures_active": self.textures_check.isChecked(),
+            "textures_shapes": {                    # M18
+                shp: cb.isChecked()
+                for shp, cb in self.shape_checkboxes.items()
+            },
             "textures_positions": {
                 pos: cb.isChecked()
                 for pos, cb in self.position_checkboxes.items()
@@ -24395,6 +25904,10 @@ class MainWindow(QMainWindow):
         self.textures_check.blockSignals(True)
         self.textures_check.setChecked(config["textures_active"])
         self.textures_check.blockSignals(False)
+        for shp, cb in self.shape_checkboxes.items():          # M18
+            cb.blockSignals(True)
+            cb.setChecked((config.get("textures_shapes") or {}).get(shp, False))
+            cb.blockSignals(False)
         for pos, cb in self.position_checkboxes.items():
             cb.blockSignals(True)
             cb.setChecked(config["textures_positions"].get(pos, False))
@@ -26965,7 +28478,7 @@ class MainWindow(QMainWindow):
 
         # §32 (10b): sustraer Tabla 2 a su propia ventana.
         detach_t2_btn = QPushButton()
-        self._p5_icon_btn(detach_t2_btn, "p5_detach")
+        self._p5_icon_btn(detach_t2_btn, "p5_detach", label="Detach")
         detach_t2_btn.setToolTip(
             "Open Table 2 in its own window (close that window to bring the "
             "table back here).")
@@ -27017,6 +28530,37 @@ class MainWindow(QMainWindow):
         self.ti_summary_widget = _make_summary_terminal(180)
         self.wmean_summary_widget = _make_summary_terminal(140)
         self.qa_summary_widget = _make_summary_terminal(140)
+        # M17 (2026-10-25): conteos de análisis por combinación de texturas
+        # (forma ▸ posición ▸ textura) × muestra. Arriba, qué niveles se
+        # combinan; abajo, el mismo terminal que las otras pestañas.
+        self.tex_summary_widget = _make_summary_terminal(140)
+        # Una tabla: sin partir renglones (con muchas muestras, scroll).
+        self.tex_summary_widget.setLineWrapMode(
+            QPlainTextEdit.LineWrapMode.NoWrap)
+        self._tex_sum_pane = QWidget()
+        self._tex_sum_pane.setObjectName("p4TexSumPane")
+        _tsl = QVBoxLayout(self._tex_sum_pane)
+        _tsl.setContentsMargins(0, 0, 0, 0)
+        _tsl.setSpacing(4)
+        _tsr = QHBoxLayout()
+        _tsr.setContentsMargins(2, 0, 0, 0)
+        _tsr.setSpacing(12)
+        _tsr_lab = QLabel("Combine:")
+        _tsr_lab.setStyleSheet(f"color:{THEME['text2']}; font-size:11px;"
+                               " background: transparent;")
+        _tsr.addWidget(_tsr_lab)
+        self._tex_sum_checks = {}
+        for _lvl in _COMBO_LEVELS:
+            _cb = QCheckBox(_COMBO_LEVEL_LABELS[_lvl])
+            _cb.toggled.connect(lambda *_a: self._on_tex_summary_levels())
+            _tsr.addWidget(_cb)
+            self._tex_sum_checks[_lvl] = _cb
+        _tsr.addStretch()
+        _tsl.addLayout(_tsr)
+        _tsl.addWidget(self.tex_summary_widget, 1)
+        self.tex_summary_widget.setVisible(True)    # ya tiene padre (§112)
+        self._tex_sum_pane.setVisible(False)
+        self._tex_sum_levels = None
 
         # §86-8 (pedido de Guillermo, decisión 2026-08-24): los summaries
         # ya NO se ven como los botones de dominio (U-Pb / Trace+REE / Hf / Ti).
@@ -27056,6 +28600,7 @@ class MainWindow(QMainWindow):
         self._p4_pill_wmean = _make_pill("Weighted mean", "wmean")
         self._p4_pill_ti = _make_pill("Ti-thermometry", "ti")
         self._p4_pill_qa = _make_pill("Data QA", "qa")
+        self._p4_pill_tex = _make_pill("Textures", "tex")      # M17
 
         # Riel del control segmentado. Con selector por objectName (§3: una
         # regla QSS sin selector se propaga a TODOS los descendientes y le
@@ -27071,6 +28616,7 @@ class MainWindow(QMainWindow):
         _seg_lay.addWidget(self._p4_pill_wmean)
         _seg_lay.addWidget(self._p4_pill_ti)
         _seg_lay.addWidget(self._p4_pill_qa)
+        _seg_lay.addWidget(self._p4_pill_tex)
 
         # §Ola12 — el recuadro negro SALE de Panel 4 a su propia ventana
         # flotante (_ResultsWindow). Motivo: aquí abajo quedaba tapado por
@@ -27099,6 +28645,7 @@ class MainWindow(QMainWindow):
         _cc.addWidget(self.ti_summary_widget)
         _cc.addWidget(self.wmean_summary_widget)
         _cc.addWidget(self.qa_summary_widget)
+        _cc.addWidget(self._tex_sum_pane)
         _sum_lay.addWidget(self._p4_summary_content, 1)
 
         self._p4_active_summary = None   # None | "wmean" | "ti" | "qa"
@@ -27106,11 +28653,13 @@ class MainWindow(QMainWindow):
             "wmean": self._p4_pill_wmean,
             "ti": self._p4_pill_ti,
             "qa": self._p4_pill_qa,
+            "tex": self._p4_pill_tex,
         }
         self._p4_summary_terms = {
             "wmean": self.wmean_summary_widget,
             "ti": self.ti_summary_widget,
             "qa": self.qa_summary_widget,
+            "tex": self._tex_sum_pane,
         }
         self._p4_upper_layout = upper_layout
         self._refresh_ti_summary_visibility()  # oculta la píldora Ti si Ti off
@@ -27149,6 +28698,7 @@ class MainWindow(QMainWindow):
         self.calc_table.horizontalHeader().setFixedHeight(35)
         self.calc_table.verticalHeader().setVisible(False)
         self.calc_table.verticalHeader().setDefaultSectionSize(14)
+        self._watch_manual_col_widths(self.calc_table, "t2")        # M20
         self.calc_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.calc_table.setSelectionMode(
             QAbstractItemView.SelectionMode.ContiguousSelection
@@ -27175,7 +28725,7 @@ class MainWindow(QMainWindow):
         _t2_bar.setContentsMargins(2, 0, 2, 0)
         _t2_bar.setSpacing(6)
         self._pin_id_t2_chk = QPushButton()
-        self._p5_icon_btn(self._pin_id_t2_chk, "pin")
+        self._p5_icon_btn(self._pin_id_t2_chk, "pin", label="Pin ID")
         self._pin_id_t2_chk.setCheckable(True)
         self._pin_id_t2_chk.setToolTip(
             "Pin ID — keep the Analysis ID in the row header so it stays "
@@ -27192,7 +28742,7 @@ class MainWindow(QMainWindow):
         # (setChecked / isChecked / toggled / blockSignals): ui_state y las
         # pruebas siguen hablándole igual.
         _t2_gear = QPushButton()
-        self._p5_icon_btn(_t2_gear, "gear")
+        self._p5_icon_btn(_t2_gear, "gear", label="Columns")
         _t2_gear.setToolTip("Table 2 settings — which columns to show, "
                             "hide the filtered-out analyses, sort the rows.")
         _t2_menu = QMenu(_t2_gear)
@@ -27263,7 +28813,7 @@ class MainWindow(QMainWindow):
         # nunca sea una sorpresa: con TODO lo marcado ya excluido a mano dice
         # "Include", y en cualquier otro caso dice "Exclude".
         _t2_excl_btn = QPushButton()
-        self._p5_icon_btn(_t2_excl_btn, "exclude")
+        self._p5_icon_btn(_t2_excl_btn, "exclude", label="Exclude")
         _t2_excl_btn.clicked.connect(self._on_t2_exclude_btn)
         self._t2_excl_btn = _t2_excl_btn
         self._refresh_t2_exclude_btn()
@@ -29425,7 +30975,8 @@ class MainWindow(QMainWindow):
                 yerr = ([p[3] if p[3] is not None else 0.0 for p in pts]
                         if err_ehf else None)
                 eb = ax.errorbar(
-                    xs, ys, xerr=xerr, yerr=yerr, fmt=_bmk, markersize=_bsz,
+                    xs, ys, xerr=xerr, yerr=yerr, fmt="", marker=_bmk,
+                    linestyle="none", markersize=_bsz,
                     markerfacecolor=("none" if _bramp else color),
                     markeredgecolor="#1a2a3a",
                     markeredgewidth=0.4,
@@ -29984,7 +31535,8 @@ class MainWindow(QMainWindow):
                 yerr = ([p[3] if p[3] is not None else 0.0 for p in pts]
                         if err_ratio else None)
                 eb = ax.errorbar(
-                    xs, ys, xerr=xerr, yerr=yerr, fmt=_bmk, markersize=_bsz,
+                    xs, ys, xerr=xerr, yerr=yerr, fmt="", marker=_bmk,
+                    linestyle="none", markersize=_bsz,
                     markerfacecolor=("none" if _bramp else color),
                     markeredgecolor="#1a2a3a",
                     markeredgewidth=0.4,
@@ -33375,53 +34927,6 @@ class MainWindow(QMainWindow):
             app_l.setSpacing(4)
             return _c
 
-        # ── Age (2026-09-30) ─────────────────────────────────────────────────
-        # Antes Age distribution usaba la edad del weighted mean (se elegía en
-        # Calculations ▸ U-Pb). Ahora cada diagrama decide la suya: el WM en
-        # su Settings, y ésta aquí. Sin clave guardada, arranca con la del WM.
-        _section("Age")
-        _kage_sub = QWidget()
-        _kage_sub.setStyleSheet("background: transparent;")
-        _kage_l = QVBoxLayout(_kage_sub)
-        _kage_l.setContentsMargins(8, 2, 0, 0)
-        _kage_l.setSpacing(2)
-        _kage_grp = QButtonGroup(dlg)
-        _kage_ids = [o[0] for o in self._wmean_age_source_options]
-        _kage_cur = self._kde_age_source(cfg)
-        _kage_conc_ok = bool(self._read_panel4_config().get(
-            "compute_concordia", False))
-        for _i, (_aid, _albl) in enumerate(self._wmean_age_source_options):
-            _rb = QRadioButton(_albl)
-            _rb.setStyleSheet("QRadioButton { font-size: 12px; }")
-            _kage_grp.addButton(_rb, _i)
-            _kage_l.addWidget(_rb)
-            if _aid == "best":
-                _rb.setToolTip(
-                    "²⁰⁶Pb/²³⁸U below the cutoff, ²⁰⁷Pb/²⁰⁶Pb above it "
-                    "(Spencer et al. 2016).")
-            if _aid == "concordia" and not _kage_conc_ok:
-                _rb.setEnabled(False)
-                _rb.setToolTip("Turn on 'Concordia age' in "
-                               "U-Pb ▸ U-Pb ages.")
-        _ksel = (_kage_ids.index(_kage_cur) if _kage_cur in _kage_ids else 0)
-        if not _kage_grp.button(_ksel).isEnabled():
-            _ksel = 0
-        _kage_grp.button(_ksel).setChecked(True)
-        # Ola 17 · L1: si pedía la edad de concordia y está apagada, se dice
-        # aquí que se usa la Best age (§92).
-        _kage_raw = (cfg.get("kde_age_source")
-                     or self._read_panel4_config().get("wmean_age_source"))
-        if _kage_raw == "concordia" and not _kage_conc_ok:
-            _kfb = QLabel(
-                "'Concordia age' is off in U-Pb ▸ U-Pb ages, so this diagram "
-                "uses the Best age.")
-            _kfb.setWordWrap(True)
-            _kfb.setStyleSheet("color:#c0392b; font-size:11px; "
-                               "background:transparent;")
-            _kage_l.addWidget(_kfb)
-        outer.addWidget(_kage_sub)
-        outer.addSpacing(6)
-
         # ── Grouping (punto 4, 2026-07-11) ───────────────────────────────────
         # Los 4 modos (Per sample: [combo] / All combined / Stacked / Similarity
         # matrix) se movieron aquí desde la barra del gráfico. Persiste en
@@ -33519,6 +35024,55 @@ class MainWindow(QMainWindow):
         _kde_rb_per.toggled.connect(lambda _c: _sync_kde_grp_combo())
         _sync_kde_grp_combo()
         outer.addWidget(_kde_grp_sub)
+
+        # 2026-10-24 (Guillermo): primero Samples y luego Age — se elige
+        # QUÉ se grafica antes que con qué edad.
+        # ── Age (2026-09-30) ─────────────────────────────────────────────────
+        # Antes Age distribution usaba la edad del weighted mean (se elegía en
+        # Calculations ▸ U-Pb). Ahora cada diagrama decide la suya: el WM en
+        # su Settings, y ésta aquí. Sin clave guardada, arranca con la del WM.
+        _section("Age")
+        _kage_sub = QWidget()
+        _kage_sub.setStyleSheet("background: transparent;")
+        _kage_l = QVBoxLayout(_kage_sub)
+        _kage_l.setContentsMargins(8, 2, 0, 0)
+        _kage_l.setSpacing(2)
+        _kage_grp = QButtonGroup(dlg)
+        _kage_ids = [o[0] for o in self._wmean_age_source_options]
+        _kage_cur = self._kde_age_source(cfg)
+        _kage_conc_ok = bool(self._read_panel4_config().get(
+            "compute_concordia", False))
+        for _i, (_aid, _albl) in enumerate(self._wmean_age_source_options):
+            _rb = QRadioButton(_albl)
+            _rb.setStyleSheet("QRadioButton { font-size: 12px; }")
+            _kage_grp.addButton(_rb, _i)
+            _kage_l.addWidget(_rb)
+            if _aid == "best":
+                _rb.setToolTip(
+                    "²⁰⁶Pb/²³⁸U below the cutoff, ²⁰⁷Pb/²⁰⁶Pb above it "
+                    "(Spencer et al. 2016).")
+            if _aid == "concordia" and not _kage_conc_ok:
+                _rb.setEnabled(False)
+                _rb.setToolTip("Turn on 'Concordia age' in "
+                               "U-Pb ▸ U-Pb ages.")
+        _ksel = (_kage_ids.index(_kage_cur) if _kage_cur in _kage_ids else 0)
+        if not _kage_grp.button(_ksel).isEnabled():
+            _ksel = 0
+        _kage_grp.button(_ksel).setChecked(True)
+        # Ola 17 · L1: si pedía la edad de concordia y está apagada, se dice
+        # aquí que se usa la Best age (§92).
+        _kage_raw = (cfg.get("kde_age_source")
+                     or self._read_panel4_config().get("wmean_age_source"))
+        if _kage_raw == "concordia" and not _kage_conc_ok:
+            _kfb = QLabel(
+                "'Concordia age' is off in U-Pb ▸ U-Pb ages, so this diagram "
+                "uses the Best age.")
+            _kfb.setWordWrap(True)
+            _kfb.setStyleSheet("color:#c0392b; font-size:11px; "
+                               "background:transparent;")
+            _kage_l.addWidget(_kfb)
+        outer.addWidget(_kage_sub)
+        outer.addSpacing(6)
 
         # ── Color by (Ola 15) ─────────────────────────────────────────────────
         # Antes el histograma y el rug estaban CABLEADOS a Set — el único
@@ -34968,6 +36522,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             "Ti thermometry: no results yet — enter or import data in Table 1.", 7000)
 
+    @_p5_profiled("tibox_style")
     def _update_tibox_plot(self):
         """Dispatcher de Plot it!: gate estricto → _build_tibox_plot."""
         if not self.current_project:
@@ -35173,9 +36728,34 @@ class MainWindow(QMainWindow):
         present = [g for g in order
                    if used_by[g] or (show_excluded and (tiout_by[g] or upb_by[g]))]
         if not present:
-            ax.text(0.5, 0.5,
-                    "No Ti temperatures to plot.\n"
-                    "(enable Ti thermometry in Calculations ▸ Ti)",
+            # 2026-10-24 (reporte de Guillermo con SJC): el aviso decía
+            # "enable Ti thermometry" aunque 13b SÍ tenía sus 123
+            # temperaturas — todas sin set y con "Exclude grains with no
+            # set" encendido. Se dice la causa de verdad.
+            _shown = [e for e in (self.calc_results or [])
+                      if e["ti_t_c"] is not None
+                      and (sample_filter is None
+                           or e["sample_name"] in sample_filter)
+                      and (mode not in (0, 3)
+                           or e["sample_name"] in active_set)]
+            _who = (f"{active_order[0]}" if _primary == "per_sample"
+                    and active_order else "the samples shown")
+            if not _shown:
+                _why = ("No Ti temperatures to plot.\n"
+                        "(enable Ti thermometry in Calculations ▸ Ti)"
+                        if not any(e["ti_t_c"] is not None
+                                   for e in (self.calc_results or []))
+                        else f"No Ti temperatures in {_who}.")
+            elif exclude_unassigned and not any(e["set_name"]
+                                                for e in _shown):
+                _why = (f"The {len(_shown)} Ti temperatures of {_who} have no "
+                        "set,\nand 'Exclude grains with no set' is on "
+                        "(Settings ▸ 1 · Samples & boxes).")
+            else:
+                _why = (f"All Ti temperatures of {_who} are Ti outliers or "
+                        "excluded.\nTick 'Show excluded grains' in "
+                        "Settings ▸ 2 · Marker settings to see them.")
+            ax.text(0.5, 0.5, _why,
                     transform=ax.transAxes, ha="center", va="center",
                     fontsize=11, color="#c87a7a", style="italic")
             self._tibox_canvas.draw_idle()
@@ -35881,6 +37461,9 @@ class MainWindow(QMainWindow):
             if _ssr is not None:
                 _ts["sample_styles"] = _ssr
 
+        # 2026-10-24: como en las otras pestañas (§148), cambiar de muestra
+        # en "1 · Samples & boxes" = editar la configuración de ESA muestra.
+        self._p5s_bind_scope(dlg, _ti_grp, 0, _ti_sample_combo)
         self._p5_show_settings(
             dlg, bb, _commit, "tibox_style", "Ti thermometry updated.",
             validate=_ti_pk["validate_now"])
@@ -38054,7 +39637,15 @@ class MainWindow(QMainWindow):
         # únicamente QUÉ MUESTRAS; ya no fuerza el color por set.
         _cmode, _rcfg, _cls_thr, _cls_defs = self._biv_color_plan(cfg)
         marker_by = self._biv_marker_by(cfg)
-        symb = marker_by if marker_by in ("position", "type") else "none"
+        symb = (marker_by if marker_by in _MARKER_BY_TEXTURE
+                or marker_by == "combo" else "none")
+        # 2026-10-26 (Guillermo): con "Use these colors" de las combinaciones
+        # de textura, el color lo pone CADA combinación y 3 · Color by queda
+        # anulado (ni rampa, ni clases, ni sets, ni muestras).
+        _cmb_colors = (marker_by == "combo" and bool(
+            (cfg.get("biv_combo") or {}).get("use_colors")))
+        if _cmb_colors:
+            _cmode = "combo"
         _ramp_on = (_cmode == "ramp")
         _classes_on = (_cmode == "classes")
         _setramp_on = (_cmode == "set_ramp")
@@ -38091,15 +39682,20 @@ class MainWindow(QMainWindow):
         # graficó, como ya hacían Concordia, Weighted mean, KDE y Hf.
         _tsamp = (str(cfg.get("biv_sample") or "") if mode == 0 else "")
         _tpre = f"{_tsamp} — " if _tsamp else ""
+        # 2026-10-24 (M10, Guillermo): el rótulo de un eje en escala log lo
+        # dice, "U (ppm) [log]" (el título no). Un rótulo editado a mano en
+        # Style lo reemplaza entero, como siempre.
+        _xl = f"{x_lbl} [log]" if log_x else x_lbl
+        _yl = f"{y_lbl} [log]" if log_y else y_lbl
         if in_stack:
             _i, _n = stack_pos
             self._setup_biv_axes(
-                xlabel=(x_lbl if _i == _n - 1 else ""), ylabel=y_lbl,
+                xlabel=(_xl if _i == _n - 1 else ""), ylabel=_yl,
                 title=(f"{_tpre}Stacked bivariate — X: {x_lbl}"
                        if _i == 0 else ""),
                 ax=ax)
         else:
-            self._setup_biv_axes(xlabel=x_lbl, ylabel=y_lbl,
+            self._setup_biv_axes(xlabel=_xl, ylabel=_yl,
                                  title=f"{_tpre}{y_lbl} vs {x_lbl}", ax=ax)
         # La escala log se fija DESPUÉS de dibujar (ver abajo) — gotcha de
         # matplotlib cazado con datos reales: errorbar sobre un eje ya-log
@@ -38120,18 +39716,22 @@ class MainWindow(QMainWindow):
         # Texture type, una a la vez). Espejo estricto: si la columna de
         # textura ya no existe en Tabla 1 (Panel 2 la apagó después de guardar
         # la config) se cae al marcador base con aviso.
-        tex_header = {"position": "Position",
-                      "type": "Texture\nType"}.get(symb)
+        tex_header = _TEXTURE_COL_HEADERS.get(_MARKER_BY_TEXTURE.get(symb))
         # T17: built-ins + customs del proyecto (los registrados por el usuario
         # traen su propio marcador elegido en el editor de texturas).
         marker_map = self._texture_marker_map(
-            "positions" if symb == "position" else "types")
+            _MARKER_BY_TEXTURE.get(symb, "types"))
         dyn_cols = self.data_table.dynamic_cols
         symb_fallback = False
         if tex_header is not None and not any(
                 h == tex_header for h, _, _ in dyn_cols):
             symb_fallback = True
             tex_header = None
+        # M17: por COMBINACIÓN — una "columna virtual": el texto de cada
+        # grano es su combinación y el mapa, las que el usuario marcó.
+        _cmb = self._combo_marker_setup(cfg.get("biv_combo"), symb)
+        if _cmb is not None:
+            tex_header, marker_map = "__combo__", _cmb["markers"]
 
         # ── Resolver puntos desde el modelo ──────────────────────────────────
         # Ola 15: UNA pasada. La llave de grupo es (ckey, marcador, pequeño),
@@ -38181,10 +39781,14 @@ class MainWindow(QMainWindow):
             if tex_header is None:
                 txt, tex_mk, small = "", None, False
             else:
-                txt = self._get_t1_text(
-                    entry["vrow"]["raw_cells"], dyn_cols, tex_header)
+                txt = (self._combo_of(self._texture_values_of(
+                           entry, _cmb["cols"]), _cmb["levels"])
+                       if _cmb is not None else self._get_t1_text(
+                           entry["vrow"]["raw_cells"], dyn_cols, tex_header))
                 tex_mk = marker_map.get(txt)
                 small = tex_mk is None   # sin textura (o texto fuera del mapa)
+            # La combinación con símbolo propio de este grano (o None).
+            _sub = txt if (_cmb is not None and not small) else None
             mk = self._biv_marker_for(marker_by, sn, s, tex_mk, _ss, _smm,
                                       _base_mk)
             if entry["excluded_from_mean"]:
@@ -38205,7 +39809,17 @@ class MainWindow(QMainWindow):
             # ── Quién pone el color de ESTE grano ────────────────────────────
             _rv = (self._biv_resolve_value(entry, _rcfg["var"])[0]
                    if (_ramp_on or _classes_on or _setramp_on) else None)
-            if _ramp_on:
+            if _cmb_colors:                      # 2026-10-26
+                if _sub is None:
+                    ckey = ("cmbx",)
+                    _gmeta.setdefault(ckey, {"color": "#c3cad2",
+                                             "label": "Other combinations"})
+                else:
+                    ckey = ("cmb", _sub)
+                    _gmeta.setdefault(ckey, {
+                        "color": _cmb["colors"].get(_sub, "#1a2a3a"),
+                        "label": _sub})
+            elif _ramp_on:
                 ckey = None                      # color individual, sin grupo
             elif _classes_on:
                 _ci = self._class_index(_rv, _cls_thr)
@@ -38232,7 +39846,7 @@ class MainWindow(QMainWindow):
                 ckey = ("set", s)
                 _gmeta.setdefault(ckey, {"color": self._get_set_color(s),
                                          "label": s if s else "Unassigned"})
-            pts_by_group.setdefault((ckey, mk, small), []).append(
+            pts_by_group.setdefault((ckey, mk, small, _sub), []).append(
                 (x, y, sx, sy, _rv))
             if sn not in _samps:
                 _samps.append(sn)
@@ -38281,7 +39895,7 @@ class MainWindow(QMainWindow):
         _sr_maps, _sr_bars = {}, []
         if _setramp_on:
             _vbs = {}
-            for (_k, _m, _s), _g in pts_by_group.items():
+            for (_k, _m, _s, _u), _g in pts_by_group.items():
                 _vbs.setdefault(_k[1], []).extend(p[4] for p in _g)
             _sr_maps, _sr_bars, _n_na = self._set_ramp_mappers(
                 _rcfg, self._set_ramp_groups(
@@ -38290,7 +39904,7 @@ class MainWindow(QMainWindow):
                              if isinstance(_ck, tuple) and _ck[0] == "smp"}))
         # n por clave de color (lo usan el orden de dibujo y la leyenda).
         _n_by_ckey = {}
-        for (_k, _m, _s), _g in pts_by_group.items():
+        for (_k, _m, _s, _u), _g in pts_by_group.items():
             _n_by_ckey[_k] = _n_by_ckey.get(_k, 0) + len(_g)
         # §94: con CLASES, la más numerosa al FONDO y las minoritarias ENCIMA
         # — lo que uno quiere distinguir no debe quedar tapado por la mayoría
@@ -38300,11 +39914,21 @@ class MainWindow(QMainWindow):
         _draw_order = list(pts_by_group.items())
         if _classes_on:
             _draw_order.sort(key=lambda kv: -_n_by_ckey.get(kv[0][0], 0))
-        for (ckey, mk, small), pts in _draw_order:
+        for (ckey, mk, small, _sub), pts in _draw_order:
             xs = [p[0] for p in pts]
             ys = [p[1] for p in pts]
             color = (_gmeta.get(ckey) or {}).get("color", "#1a2a3a")
             ms = (max(2.0, _base_sz - 2) if small else _base_sz)
+            # 2026-10-26: tamaño y opacidad propios de la combinación.
+            _a_own = None
+            if _sub is not None:
+                if _cmb["sizes"].get(_sub):
+                    ms = float(_cmb["sizes"][_sub])
+                _a_own = _cmb["alphas"].get(_sub)
+            _al_pt = (float(_a_own) if _a_own
+                      else self._eff_marker_alpha(_bstyle, 0.85))
+            _al_eb = (float(_a_own) if _a_own
+                      else self._eff_marker_alpha(_bstyle, 1.0))
             _sr_fn = (_sr_maps.get(ckey[1]) if _setramp_on
                       and isinstance(ckey, tuple) and ckey[0] in ("set", "smp")
                       else None)
@@ -38324,7 +39948,7 @@ class MainWindow(QMainWindow):
                 yerr = ([p[3] if p[3] is not None else 0.0 for p in pts]
                         if err_y else None)
                 eb = ax.errorbar(
-                    xs, ys, xerr=xerr, yerr=yerr, fmt=mk, markersize=ms,
+                    xs, ys, xerr=xerr, yerr=yerr, fmt="", marker=mk, markersize=ms,
                     markerfacecolor=("none" if _grp_ramp else color),
                     markeredgecolor="#222222",
                     markeredgewidth=0.4,
@@ -38334,21 +39958,21 @@ class MainWindow(QMainWindow):
                     ax.scatter(xs, ys, s=_s_area, c=_pt_cols,
                                edgecolors="#222222", linewidths=0.4, marker=mk,
                                zorder=5,
-                               alpha=self._eff_marker_alpha(_bstyle, 1.0))
+                               alpha=_al_eb)
                 for _cap in eb[1]:
                     _cap.set_alpha(0.45)
                 for _barcol in eb[2]:
                     _barcol.set_alpha(0.45)
-                eb[0].set_alpha(self._eff_marker_alpha(_bstyle, 1.0))  # punto 7
+                eb[0].set_alpha(_al_eb)  # punto 7
             elif _grp_ramp:
                 ax.scatter(xs, ys, s=_s_area, c=_pt_cols,
                            edgecolors="#222222", linewidths=0.4, marker=mk,
                            zorder=4,
-                           alpha=self._eff_marker_alpha(_bstyle, 0.85))
+                           alpha=_al_pt)
             else:
                 ax.plot(xs, ys, marker=mk, ms=ms,
                         mfc=color, mec="#222222", mew=0.4,
-                        alpha=self._eff_marker_alpha(_bstyle, 0.85),
+                        alpha=_al_pt,
                         linestyle="none", zorder=4)
         # Excluidos: gris hueco con su forma. Llevan barras de error (en el
         # mismo gris) si el toggle del eje está activo — pedido de Guillermo
@@ -38364,7 +39988,7 @@ class MainWindow(QMainWindow):
                 yerr = ([p[3] if p[3] is not None else 0.0 for p in pts]
                         if err_y else None)
                 eb = ax.errorbar(
-                    xs_e, ys_e, xerr=xerr, yerr=yerr, fmt=mk, markersize=ms,
+                    xs_e, ys_e, xerr=xerr, yerr=yerr, fmt="", marker=mk, markersize=ms,
                     markerfacecolor="none", markeredgecolor="#9aa6b2",
                     markeredgewidth=1.0, ecolor="#9aa6b2", elinewidth=0.8,
                     capsize=2, linestyle="none", zorder=3)
@@ -38442,11 +40066,17 @@ class MainWindow(QMainWindow):
                 return (1, 0) if k == "__na__" else (0, 0)
             _keys = list(pts_by_group)
             _seen = []
-            for (ckey, _mk, _small) in _keys:
+            for (ckey, _mk, _small, _u) in _keys:
                 if ckey not in _seen:
                     _seen.append(ckey)
             if _classes_on:
                 _seen.sort(key=_rank)
+            if _cmb_colors:                      # 2026-10-26: catálogo
+                _o = {lab: i for i, lab in enumerate(_cmb["order"])}
+                _seen.sort(key=lambda k: (
+                    k == ("cmbx",),
+                    _o.get(k[1], 10 ** 6) if isinstance(k, tuple)
+                    and k[0] == "cmb" else 0))
             for ckey in _seen:
                 if (_setramp_on and isinstance(ckey, tuple)
                         and ckey[0] in ("set", "smp") and ckey[1] in _sr_maps):
@@ -38457,7 +40087,7 @@ class MainWindow(QMainWindow):
                     _lab = f"{_lab}  (n = {_n_by_ckey.get(ckey, 0)})"
                 # El marcador de la clave: el de la forma si TODOS sus granos
                 # la comparten; si no, el base (la forma no codifica esto).
-                _mks = {mk for (k, mk, _s) in _keys if k == ckey}
+                _mks = {mk for (k, mk, _s, _u) in _keys if k == ckey}
                 handles.append(Line2D(
                     [0], [0], marker=(_mks.pop() if len(_mks) == 1
                                       else _base_mk),
@@ -38478,7 +40108,7 @@ class MainWindow(QMainWindow):
                         "sample", sn, None, None, _ss, _smm, _base_mk),
                     linestyle="none", mfc="#1a2a3a", mec="#222222", mew=0.4,
                     markersize=6, label=sn))
-        if tex_header is not None:
+        if tex_header is not None and not _cmb_colors:
             for tex_name, mk in marker_map.items():
                 if tex_name in tex_present:
                     handles.append(Line2D(
@@ -38489,7 +40119,8 @@ class MainWindow(QMainWindow):
                 handles.append(Line2D(
                     [0], [0], marker="o", linestyle="none",
                     mfc="#1a2a3a", mec="#222222", mew=0.4, ms=4,
-                    label="No texture (small)"))
+                    label=("Other combinations (small)" if _cmb is not None
+                           else "No texture (small)")))
         if n_excl_shown:
             handles.append(Line2D([0], [0], marker="o", linestyle="none",
                                   mfc="none", mec="#9aa6b2", mew=1.0, ms=6,
@@ -38713,12 +40344,15 @@ class MainWindow(QMainWindow):
         dyn_cols_dlg = self.data_table.dynamic_cols
         has_pos = any(h == "Position" for h, _, _ in dyn_cols_dlg)
         has_type = any(h == "Texture\nType" for h, _, _ in dyn_cols_dlg)
+        has_shape = any(h == "Grain shape" for h, _, _ in dyn_cols_dlg)  # M18
         _mb_grp = QButtonGroup(dlg)
         _rb_m = {0: QRadioButton("The same for every grain"),
                  1: QRadioButton("By sample"),
                  2: QRadioButton("By set"),
                  3: QRadioButton("By texture position (core / rims)"),
-                 4: QRadioButton("By texture type")}
+                 4: QRadioButton("By texture type"),
+                 5: QRadioButton("By grain shape"),            # M18
+                 6: QRadioButton("By texture combination")}    # M17
         _rb_m[1].setToolTip(
             "Each sample its own symbol — the one it has in every other plot, "
             "or the one you picked in step 3. Useful in black and white, or "
@@ -38745,6 +40379,24 @@ class MainWindow(QMainWindow):
             _mb_grp.addButton(_rb, _i)
         _rb_m[3].setEnabled(has_pos)
         _rb_m[4].setEnabled(has_type)
+        _rb_m[5].setToolTip(
+            "The symbol of each grain shape (editable in the Textures window)."
+            "\nGrains with no shape → smaller neutral marker."
+            if has_shape else
+            "Requires the Grain shape column in Table 1: enable textures in "
+            "the Textures window and press Apply.")
+        _rb_m[5].setEnabled(has_shape)
+        # M17: forma por COMBINACIÓN (p. ej. triángulo solo a "Core ▸
+        # Homogeneous dark"); su panel vive debajo de la opción.
+        _rb_m[6].setToolTip(
+            "Combine grain shape, position and texture type: give a symbol "
+            "only to the combinations you tick (e.g. Core ▸ Homogeneous dark)."
+            if (has_pos or has_type or has_shape) else
+            "Requires the texture columns in Table 1: enable textures in the "
+            "Textures window and press Apply.")
+        _rb_m[6].setEnabled(has_pos or has_type or has_shape)
+        _combo_box, _combo_api = self._combo_marker_panel(
+            cfg.get("biv_combo"))
         # El combo de forma vive DENTRO de "The same for every grain" — es su
         # control. Sigue usándose de respaldo cuando un set no define símbolo
         # o una textura no está asignada; el tooltip lo dice.
@@ -38773,8 +40425,8 @@ class MainWindow(QMainWindow):
         _mb_note.setStyleSheet("color:#c0392b; font-size:11px; "
                                "background:transparent;")
         _mb_note.hide()
-        for _w_ in (_rb_m[0], _same_box, _rb_m[1], _rb_m[2], _rb_m[3],
-                    _rb_m[4], _mb_note):
+        for _w_ in (_rb_m[0], _same_box, _rb_m[1], _rb_m[2], _rb_m[5],
+                    _rb_m[3], _rb_m[4], _rb_m[6], _combo_box, _mb_note):
             _mb_l.addWidget(_w_)
         _pt_l.addWidget(_mb_sub)
         _pt_l.addSpacing(6)
@@ -38893,14 +40545,24 @@ class MainWindow(QMainWindow):
             fallback_var=(cfg.get("biv_ramp") or {}).get("var"), by="sample")
         _cb_l.removeWidget(_cb_note)
         _cb_l.addWidget(_cb_note)
+        # 2026-10-26 (Guillermo): los colores propios de las combinaciones de
+        # textura ANULAN esta sección — se apaga con su nota.
+        _cb_lock = QLabel("Colors come from the texture combinations (2 · Marker settings ▸ "
+            "Edit symbols… ▸ Use these colors). Turn that off to color by "
+            "sample, set or a variable.")
+        _cb_lock.setWordWrap(True)
+        _cb_lock.setStyleSheet(_HINT_QSS)
+        _cb_lock.setContentsMargins(8, 0, 0, 0)
+        outer.addWidget(_cb_lock)
+        _cb_lock.hide()
         outer.addWidget(_cb_sub)
         _rb_c[{"sample": 0, "set": 1, "ramp": 2, "classes": 3,
                "single": 4, "set_ramp": 5, "sample_ramp": 6}.get(
                    self._biv_color_by(cfg), 1)].setChecked(True)
 
         _mb0 = self._biv_marker_by(cfg)
-        _mb_id = {"same": 0, "sample": 1, "set": 2,
-                  "position": 3, "type": 4}.get(_mb0, 0)
+        _mb_id = {"same": 0, "sample": 1, "set": 2, "position": 3,
+                  "type": 4, "shape": 5, "combo": 6}.get(_mb0, 0)
         if not _rb_m[_mb_id].isEnabled():      # la columna de textura ya no está
             _mb_id = 0
             _mb_note.setText(
@@ -38924,6 +40586,12 @@ class MainWindow(QMainWindow):
 
         def _sync_marker(*_):
             _same_box.setVisible(_mb_grp.checkedId() == 0)
+            _combo_box.setVisible(_mb_grp.checkedId() == 6)       # M17
+            _locked = (_mb_grp.checkedId() == 6
+                       and _combo_api["use_colors"]())
+            _cb_sub.setEnabled(not _locked)
+            _cb_lock.setVisible(_locked)
+        _combo_api["on_change"].append(_sync_marker)
         _cb_grp.idToggled.connect(lambda _i, _on: _on and _sync_color())
         _cb_grp.idClicked.connect(lambda _i: _cb_note.hide())
         _mb_grp.idToggled.connect(lambda _i, _on: _on and _sync_marker())
@@ -39264,8 +40932,9 @@ class MainWindow(QMainWindow):
             cfg["biv_sample_ramp"] = _smr_read()
             cfg["biv_single_color"] = _one_read()
             cfg["biv_marker_by"] = {0: "same", 1: "sample", 2: "set",
-                                    3: "position", 4: "type"}[
-                                        _mb_grp.checkedId()]
+                                    3: "position", 4: "type", 5: "shape",
+                                    6: "combo"}[_mb_grp.checkedId()]
+            cfg["biv_combo"] = _combo_api["read"]()                # M17
             cfg["biv_ramp"] = _ramp_read()
             # La clave vieja queda fuera: el marcador por textura es ahora una
             # opción del paso 4 y tener dos fuentes de verdad es el problema
@@ -39740,6 +41409,13 @@ class MainWindow(QMainWindow):
         _bsz = _tstyle.get("marker_size") or 5
         _cmode, _rcfg, _cls_thr, _cls_defs = self._tect_color_plan(cfg)
         marker_by = self._tect_marker_by(cfg)
+        # 2026-10-26 (Guillermo): con "Use these colors" de las combinaciones
+        # de textura, el color lo pone CADA combinación y 3 · Color by queda
+        # anulado (ni rampa, ni clases, ni sets, ni muestras).
+        _cmb_colors = (marker_by == "combo" and bool(
+            (cfg.get("tect_combo") or {}).get("use_colors")))
+        if _cmb_colors:
+            _cmode = "combo"
         _ramp_on = (_cmode == "ramp")
         _classes_on = (_cmode == "classes")
         _setramp_on = (_cmode == "set_ramp")
@@ -39757,10 +41433,10 @@ class MainWindow(QMainWindow):
              if s.get("active")])
         # Forma por textura (Shape ▸ By texture): si la columna ya no existe
         # en Tabla 1, se cae al marcador base con aviso.
-        tex_header = {"position": "Position",
-                      "type": "Texture\nType"}.get(marker_by)
+        tex_header = _TEXTURE_COL_HEADERS.get(
+            _MARKER_BY_TEXTURE.get(marker_by))
         marker_map = (self._texture_marker_map(
-            "positions" if marker_by == "position" else "types")
+            _MARKER_BY_TEXTURE.get(marker_by, "types"))
             if tex_header else {})
         dyn_cols = self.data_table.dynamic_cols
         tex_fallback = False
@@ -39768,6 +41444,10 @@ class MainWindow(QMainWindow):
                 h == tex_header for h, _, _ in dyn_cols):
             tex_fallback = True
             tex_header = None
+        # M17: por COMBINACIÓN (la misma "columna virtual" del Bivariate).
+        _cmb = self._combo_marker_setup(cfg.get("tect_combo"), marker_by)
+        if _cmb is not None:
+            tex_header, marker_map = "__combo__", _cmb["markers"]
 
         groups = {}          # (ckey, marcador, pequeño) -> [(x, y, valor)]
         _gmeta = {}          # ckey -> {"color", "label"}
@@ -39797,10 +41477,14 @@ class MainWindow(QMainWindow):
             if tex_header is None:
                 txt, tex_mk, small = "", None, False
             else:
-                txt = self._get_t1_text(
-                    entry["vrow"]["raw_cells"], dyn_cols, tex_header)
+                txt = (self._combo_of(self._texture_values_of(
+                           entry, _cmb["cols"]), _cmb["levels"])
+                       if _cmb is not None else self._get_t1_text(
+                           entry["vrow"]["raw_cells"], dyn_cols, tex_header))
                 tex_mk = marker_map.get(txt)
                 small = tex_mk is None
+            # La combinación con símbolo propio de este grano (o None).
+            _sub = txt if (_cmb is not None and not small) else None
             mk = self._biv_marker_for(marker_by, sn, st, tex_mk, _ss, _smm,
                                       _bmk)
             if tex_header is not None and (not entry["excluded_from_mean"]
@@ -39819,7 +41503,17 @@ class MainWindow(QMainWindow):
             # ── Quién pone el color de ESTE grano ────────────────────────────
             _rv = (self._biv_resolve_value(entry, _rcfg["var"])[0]
                    if (_ramp_on or _classes_on or _setramp_on) else None)
-            if _ramp_on:
+            if _cmb_colors:                      # 2026-10-26
+                if _sub is None:
+                    ckey = ("cmbx",)
+                    _gmeta.setdefault(ckey, {"color": "#c3cad2",
+                                             "label": "Other combinations"})
+                else:
+                    ckey = ("cmb", _sub)
+                    _gmeta.setdefault(ckey, {
+                        "color": _cmb["colors"].get(_sub, "#1a2a3a"),
+                        "label": _sub})
+            elif _ramp_on:
                 ckey = None                      # color individual, sin grupo
             elif _classes_on:
                 _ci = self._class_index(_rv, _cls_thr)
@@ -39846,7 +41540,8 @@ class MainWindow(QMainWindow):
                 ckey = ("set", st)
                 _gmeta.setdefault(ckey, {"color": self._get_set_color(st),
                                          "label": st if st else "Unassigned"})
-            groups.setdefault((ckey, mk, small), []).append((x, y, _rv))
+            groups.setdefault((ckey, mk, small, _sub), []).append(
+                (x, y, _rv))
             if sn not in _samps:
                 _samps.append(sn)
             if st and st not in _sets_drawn:
@@ -39898,7 +41593,7 @@ class MainWindow(QMainWindow):
         _sr_maps, _sr_bars = {}, []
         if _setramp_on:
             _vbs = {}
-            for (_k, _m, _s), _g in groups.items():
+            for (_k, _m, _s, _u), _g in groups.items():
                 if isinstance(_k, tuple) and _k[0] in ("set", "smp"):
                     _vbs.setdefault(_k[1], []).extend(p[2] for p in _g)
             _sr_maps, _sr_bars, _n_na = self._set_ramp_mappers(
@@ -39907,16 +41602,23 @@ class MainWindow(QMainWindow):
                     base_colors={_ck[1]: _m.get("color") for _ck, _m in _gmeta.items()
                              if isinstance(_ck, tuple) and _ck[0] == "smp"}))
         _n_by_ckey = {}
-        for (_k, _m, _s), _g in groups.items():
+        for (_k, _m, _s, _u), _g in groups.items():
             _n_by_ckey[_k] = _n_by_ckey.get(_k, 0) + len(_g)
         # §94: con CLASES, la más numerosa al FONDO y las minoritarias encima.
         _draw_order = list(groups.items())
         if _classes_on:
             _draw_order.sort(key=lambda kv: -_n_by_ckey.get(kv[0][0], 0))
-        for (ckey, mk, small), pp in _draw_order:
+        for (ckey, mk, small, _sub), pp in _draw_order:
             xs = [p[0] for p in pp]
             ys = [p[1] for p in pp]
             ms = (max(2.0, _bsz - 2) if small else _bsz)
+            # 2026-10-26: tamaño y opacidad propios de la combinación.
+            _al = _alpha
+            if _sub is not None:
+                if _cmb["sizes"].get(_sub):
+                    ms = float(_cmb["sizes"][_sub])
+                if _cmb["alphas"].get(_sub):
+                    _al = float(_cmb["alphas"][_sub])
             _sr_fn = (_sr_maps.get(ckey[1]) if _setramp_on
                       and isinstance(ckey, tuple) and ckey[0] in ("set", "smp")
                       else None)
@@ -39928,11 +41630,11 @@ class MainWindow(QMainWindow):
                 ax.scatter(xs, ys, s=ms * ms * (30.0 / 36.0),
                            c=[_fn(p[2]) for p in pp],
                            edgecolors="#222222", linewidths=0.4, marker=mk,
-                           alpha=_alpha, zorder=4)
+                           alpha=_al, zorder=4)
             else:
                 ax.plot(xs, ys, marker=mk, ms=ms,
                         mfc=(_gmeta.get(ckey) or {}).get("color", "#1a2a3a"),
-                        mec="#222222", mew=0.4, alpha=_alpha,
+                        mec="#222222", mew=0.4, alpha=_al,
                         linestyle="none", zorder=4)
         for (mk, small), pp in excl_by_shape.items():
             ax.plot([p[0] for p in pp], [p[1] for p in pp], marker=mk,
@@ -39949,11 +41651,17 @@ class MainWindow(QMainWindow):
         if not _ramp_on:
             _keys = list(groups)
             _seen = []
-            for (ckey, _mk, _small) in _keys:
+            for (ckey, _mk, _small, _u) in _keys:
                 if ckey not in _seen:
                     _seen.append(ckey)
             if _classes_on:
                 _seen.sort(key=lambda k: (1, 0) if k == "__na__" else (0, k[1]))
+            if _cmb_colors:                      # 2026-10-26: catálogo
+                _o = {lab: i for i, lab in enumerate(_cmb["order"])}
+                _seen.sort(key=lambda k: (
+                    k == ("cmbx",),
+                    _o.get(k[1], 10 ** 6) if isinstance(k, tuple)
+                    and k[0] == "cmb" else 0))
             for ckey in _seen:
                 meta = _gmeta.get(ckey) or {}
                 _lab = meta.get("label", "")
@@ -39964,7 +41672,7 @@ class MainWindow(QMainWindow):
                     continue    # sin set / color único: sin entrada (BIV-3)
                 if _classes_on:
                     _lab = f"{_lab}  (n = {_n_by_ckey.get(ckey, 0)})"
-                _mks = {m for (k, m, _s) in _keys if k == ckey}
+                _mks = {m for (k, m, _s, _u) in _keys if k == ckey}
                 legend_handles.append(Line2D(
                     [0], [0], marker=(_mks.pop() if len(_mks) == 1 else _bmk),
                     linestyle="none", mfc=meta.get("color", "#1a2a3a"),
@@ -39986,7 +41694,7 @@ class MainWindow(QMainWindow):
                     [0], [0], marker=(self._get_set_marker(st) or _bmk),
                     linestyle="none", mfc="#1a2a3a", mec="#222222", mew=0.4,
                     markersize=6, label=st))
-        if tex_header is not None:
+        if tex_header is not None and not _cmb_colors:
             for tex_name, mk in marker_map.items():
                 if tex_name in tex_present:
                     legend_handles.append(Line2D(
@@ -39995,7 +41703,9 @@ class MainWindow(QMainWindow):
             if n_notex:
                 legend_handles.append(Line2D(
                     [0], [0], marker="o", linestyle="none", mfc="#1a2a3a",
-                    mec="#222222", mew=0.4, ms=4, label="No texture (small)"))
+                    mec="#222222", mew=0.4, ms=4,
+                    label=("Other combinations (small)" if _cmb is not None
+                           else "No texture (small)")))
         if n_excl_shown:
             legend_handles.append(Line2D(
                 [0], [0], marker=_bmk, linestyle="none", mfc="none",
@@ -40130,7 +41840,8 @@ class MainWindow(QMainWindow):
         # aquí): todo lo del punto en un solo sitio, como en Bivariate (§105).
         _section("2 · Marker settings")
         _mk_box, _mk_api = self._grain_marker_block(
-            dlg, _tst0, self._tect_marker_by(cfg))
+            dlg, _tst0, self._tect_marker_by(cfg),
+            combo_cfg=cfg.get("tect_combo"))
         outer.addWidget(_mk_box)
         excl_check = QCheckBox("Show excluded analyses (grey, hollow)")
         excl_check.setStyleSheet("QCheckBox { font-size: 12px; }")
@@ -40150,7 +41861,24 @@ class MainWindow(QMainWindow):
             (cfg.get("tect_style") or {}).get("sample_styles"), "tect",
             single_key="tect_single_color", set_ramp_key="tect_set_ramp",
             sample_ramp_key="tect_sample_ramp")
+        # 2026-10-26: los colores propios de las combinaciones de textura
+        # ANULAN esta sección (como en el Bivariate).
+        _cb_lock = QLabel("Colors come from the texture combinations (2 · Marker settings ▸ "
+            "Edit symbols… ▸ Use these colors). Turn that off to color by "
+            "sample, set or a variable.")
+        _cb_lock.setWordWrap(True)
+        _cb_lock.setStyleSheet(_HINT_QSS)
+        _cb_lock.setContentsMargins(8, 0, 0, 0)
+        outer.addWidget(_cb_lock)
+        _cb_lock.hide()
         outer.addWidget(_cb_box)
+
+        def _sync_cb_lock():
+            _locked = _mk_api["combo_colors"]()
+            _cb_box.setEnabled(not _locked)
+            _cb_lock.setVisible(_locked)
+        _mk_api["on_change"].append(_sync_cb_lock)
+        _sync_cb_lock()
 
         _section("Reference fields")
         rf_sub = QWidget()
@@ -40196,6 +41924,9 @@ class MainWindow(QMainWindow):
             cfg["tect_color_by"] = _cb
             cfg["tect_single_color"] = _cb_api["single_read"]()
             cfg["tect_marker_by"] = _mk.pop("marker_by")
+            _cmbr = _mk.pop("combo", None)                          # M17
+            if _cmbr is not None:
+                cfg["tect_combo"] = _cmbr
             cfg["tect_ramp"] = _rc
             if _cb_api["set_ramp_read"]() is not None:
                 cfg["tect_set_ramp"] = _cb_api["set_ramp_read"]()
@@ -41079,6 +42810,18 @@ class MainWindow(QMainWindow):
             "color: #6E6E73; font-size: 11px; "
             "background:transparent;")
         _wm_age_l.addWidget(_wm_age_note)
+        # 2026-10-24 (M2, Guillermo): un diagrama SOLO de barras. La edad de
+        # arriba se sigue usando (cada barra es un análisis con esa edad, y
+        # decide el rechazo de outliers); esto solo quita lo que la dibuja.
+        means_check = QCheckBox("Show the weighted means")
+        means_check.setStyleSheet("QCheckBox { font-size: 12px; }")
+        means_check.setToolTip(
+            "Off: no mean line or band, no ages in the legend and no group\n"
+            "names over the bars — only each analysis with its error bar.\n"
+            "The legend stays, with the color of each group.")
+        means_check.setChecked(bool(cfg.get("wmean_show_means", True)))
+        _wm_age_l.addSpacing(4)
+        _wm_age_l.addWidget(means_check)
         outer.addWidget(_wm_age_sub)
         outer.addSpacing(6)
 
@@ -41521,10 +43264,15 @@ class MainWindow(QMainWindow):
         def _sync_legend_stats():
             # §44: lo dependiente se grisea (P solo tiene sentido con las
             # estadísticas encendidas, y estas solo con las edades).
-            on = legend_ages_check.isChecked()
+            # (M2: y todo lo de las medias, sin medias.)
+            _m = means_check.isChecked()
+            for _w in (legend_ages_check, group_lbl_check, undated_check):
+                _w.setEnabled(_m)
+            on = _m and legend_ages_check.isChecked()
             legend_stats_check.setEnabled(on)
             legend_p_check.setEnabled(on and legend_stats_check.isChecked())
 
+        means_check.toggled.connect(lambda *_a: _sync_legend_stats())
         legend_ages_check.toggled.connect(lambda *_a: _sync_legend_stats())
         legend_stats_check.toggled.connect(lambda *_a: _sync_legend_stats())
         _sync_legend_stats()
@@ -41585,6 +43333,7 @@ class MainWindow(QMainWindow):
                                           else "separate")  # §13 D-iii-b
             cfg["wmean_show_excluded"] = show_excl_check.isChecked()  # §13 D-ii
             cfg["wmean_show_legend_ages"] = legend_ages_check.isChecked()  # Tarea 3
+            cfg["wmean_show_means"] = means_check.isChecked()              # M2
             cfg["wmean_legend_stats"] = legend_stats_check.isChecked()     # §90
             cfg["wmean_legend_pvalue"] = legend_p_check.isChecked()        # §90
             if _gl_touched[0]:
@@ -42285,18 +44034,25 @@ class MainWindow(QMainWindow):
         n_total = n_used + n_excluded
         # Subtítulo en dos partes: el aviso de Halpin (§7.12, si aplica) + el
         # n=usados/total de la exclusión. Se unen con " · " en una línea.
+        # 2026-10-24 (M2): sin medias el diagrama es solo de barras — ni línea
+        # ni banda, ni edades, ni nombres de grupo; la leyenda dice qué es el
+        # color de cada barra (la misma que con una sola media global), y el
+        # subtítulo ya no habla de medias.
+        _means_on = bool((self.projects[self.current_project]
+                          .get("panel5_config") or {})
+                         .get("wmean_show_means", True))
         _sub_parts = []
         if halpin_note:
             _sub_parts.append(halpin_note)
-        if n_age_skipped:
+        if n_age_skipped and _means_on:
             _sub_parts.append(f"{n_age_skipped} not averaged (set)")
         if n_excluded:
-            _s = f"n = {n_used}/{n_total} in the mean"
+            _s = f"n = {n_used}/{n_total} in the mean" if _means_on else ""
             if n_excl_shown:
                 _s += f" · {n_excl_shown} excluded shown in grey, dashed"
             else:
                 _s += f" · {n_excluded} excluded (hidden)"
-            _sub_parts.append(_s)
+            _sub_parts.append(_s.lstrip(" ·"))
         # Decisión de Guillermo (2026-07-17): el subtítulo SIGUE al título —
         # ocultar el título (Appearance ▸ Title ▸ Show) oculta también esta
         # línea gris (y su pad extra). No hay toggle propio.
@@ -42510,7 +44266,8 @@ class MainWindow(QMainWindow):
                 _hl_art = eb[0]
             else:
                 eb = ax.errorbar(
-                    xp, p["age"], yerr=p["sigma_2se"], fmt=_bmk,
+                    xp, p["age"], yerr=p["sigma_2se"], fmt="", marker=_bmk,
+                    linestyle="none",
                     color=_bar_color(p), markersize=_bsz, capsize=3,
                     elinewidth=1.2,
                     markeredgecolor="#2a2a2a", markeredgewidth=0.4, zorder=5,
@@ -42579,7 +44336,10 @@ class MainWindow(QMainWindow):
                     _cs = {_hx(_bar_color(points[i])) for i in _mem}
                     if len(_cs) == 1:
                         _b["color"] = next(iter(_cs))
-        self._draw_wmean_means(ax, mean_buckets, group_means, xpos=xpos)
+        if _means_on:                       # (M2, ver el subtítulo)
+            self._draw_wmean_means(ax, mean_buckets, group_means, xpos=xpos)
+        else:
+            mean_buckets = []
         if _bstyle != "lines":
             # Con cajas rellenas la LÍNEA de la media (zorder 4) quedaría
             # tapada donde cruza una caja: pasa por encima. Las bandas ±2σ de
@@ -42599,9 +44359,9 @@ class MainWindow(QMainWindow):
         # casilla de Settings ▸ Legend, color + nombre + n en la leyenda
         # (decisión de Guillermo). Si el grupo ya tiene su cuadrito (media
         # global con color por set), sólo se le cambia el rótulo.
-        _undated_on = bool((self.projects[self.current_project]
-                            .get("panel5_config") or {})
-                           .get("wmean_legend_undated", False))
+        _undated_on = _means_on and bool((self.projects[self.current_project]
+                                          .get("panel5_config") or {})
+                                         .get("wmean_legend_undated", False))
 
         def _add_undated(handles, labels):
             if not _undated_on or _as_inset:
@@ -42638,7 +44398,7 @@ class MainWindow(QMainWindow):
                 labels.append(txt)
 
         # ── Leyenda ──────────────────────────────────────────────────────────
-        if group_means == "none":
+        if group_means == "none" or not _means_on:
             # Ola 15: la leyenda sigue a lo que el COLOR codifica. Antes
             # listaba los sets siempre; con el color por muestra o por una
             # variable eso sería una leyenda falsa.
@@ -42755,7 +44515,7 @@ class MainWindow(QMainWindow):
             "ticks": _ticks, "k": 1,
         }
         ax._zirclock_wm_xpos = list(xpos)    # Ola 17 · L11: barra → posición
-        if group_means != "none" and not _as_inset:
+        if group_means != "none" and not _as_inset and _means_on:
             self._draw_wmean_group_labels(ax, mean_buckets, points, xpos)
         return n
 
@@ -46134,7 +47894,8 @@ class MainWindow(QMainWindow):
     # la opción elegida. El modo vuelve a decidir únicamente qué muestras.
     _BIV_COLOR_BY = ("sample", "set", "ramp", "classes", "single",
                      "set_ramp", "sample_ramp")
-    _BIV_MARKER_BY = ("same", "sample", "set", "position", "type")
+    _BIV_MARKER_BY = ("same", "sample", "set", "position", "type", "shape",
+                      "combo")
 
     def _biv_color_by(self, cfg):
         """"sample" | "set" | "ramp" | "classes". Sin la clave (proyectos de
@@ -46206,7 +47967,7 @@ class MainWindow(QMainWindow):
         """Forma efectiva de un grano, SIN cascada oculta: manda la fuente que
         el usuario eligió y nada más. `tex_mk` es el marcador de su textura
         (None si la columna no trae valor) → esos granos caen al base."""
-        if marker_by in ("position", "type"):
+        if marker_by in _MARKER_BY_TEXTURE or marker_by == "combo":
             return tex_mk or base
         if marker_by == "set":
             return (self._get_set_marker(st) if st else None) or base
@@ -46222,7 +47983,8 @@ class MainWindow(QMainWindow):
     # set. Ahora son dos elecciones independientes, como en §105.
     _TECT_COLOR_BY = ("sample", "set", "ramp", "classes", "single",
                       "set_ramp", "sample_ramp")
-    _TECT_MARKER_BY = ("same", "sample", "set", "position", "type")
+    _TECT_MARKER_BY = ("same", "sample", "set", "position", "type",
+                       "shape", "combo")
 
     def _tect_color_by(self, cfg):
         """Sin la clave se deduce de lo que se VEÍA: per-sample forzaba set."""
@@ -52729,7 +54491,8 @@ class MainWindow(QMainWindow):
                      ("Triangle ▲", "^"), ("Diamond ◆", "D"),
                      ("Inv. triangle ▼", "v"), ("Pentagon", "p"),
                      ("Star ★", "*"), ("Hexagon", "h"),
-                     ("Plus", "+"), ("Cross ✕", "x"))
+                     ("Plus", "+"), ("Cross ✕", "x")) + tuple(
+        (_l, _c) for _c, _l in ZIRCON_MARKER_CHOICES)      # 2026-10-26
 
     def _build_sample_override_rows(self, sample_styles, caption=None,
                                     markers=True):
@@ -52849,6 +54612,8 @@ class MainWindow(QMainWindow):
         "set": "By set",
         "position": "By texture position (core / rims)",
         "type": "By texture type",
+        "shape": "By grain shape",                      # M18
+        "combo": "By texture combination",              # M17
     }
 
     @staticmethod
@@ -52860,10 +54625,363 @@ class MainWindow(QMainWindow):
         lay.setSpacing(3)
         return w, lay
 
+    def _combo_marker_panel(self, ccfg):
+        """M17 (2026-10-25) + 2026-10-26 — "Marker by ▸ By texture
+        combination". En Settings queda un RESUMEN y el botón "Edit
+        symbols…", que abre una ventana propia (decisión de Guillermo: en el
+        ancho de Settings los nombres largos se cortaban y no cabían color,
+        tamaño ni opacidad). api["read"]() → {"levels", "markers", "colors",
+        "sizes", "alphas", "use_colors"}; api["use_colors"]() dice si los
+        colores propios mandan (y entonces 3 · Color by se apaga);
+        api["on_change"] es la lista de funciones a llamar tras editar."""
+        ccfg = ccfg or {}
+        box = QWidget()
+        box.setObjectName("comboMkBox")
+        box.setStyleSheet("#comboMkBox { background: transparent; }")
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(_DLG_STEP, 2, 0, 2)
+        lay.setSpacing(4)
+        st = {"levels": [l for l in _COMBO_LEVELS
+                         if l in (ccfg.get("levels") or [])]
+              or self._combo_default_levels(),
+              "on": set((ccfg.get("markers") or {}).keys()),
+              "mk": dict(ccfg.get("markers") or {}),
+              "col": dict(ccfg.get("colors") or {}),
+              "size": dict(ccfg.get("sizes") or {}),
+              "alpha": dict(ccfg.get("alphas") or {}),
+              "use_colors": bool(ccfg.get("use_colors"))}
+        summ = QLabel("")
+        summ.setWordWrap(True)
+        summ.setStyleSheet("font-size:12px; background:transparent;")
+        lay.addWidget(summ)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        btn = QPushButton("Edit symbols…")
+        btn.setObjectName("smallBtn")
+        btn.setToolTip("Symbol, color, size and opacity of each combination, "
+                       "in a window of its own.")
+        row.addWidget(btn)
+        row.addStretch()
+        lay.addLayout(row)
+        hint = QLabel("Unticked combinations: small neutral marker, "
+                      "together in the legend.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet(_HINT_QSS)
+        lay.addWidget(hint)
+        on_change = []
+
+        def _present():
+            return set(self._combo_counts(st["levels"]))
+
+        def refresh():
+            pres = _present()
+            n_on = len(st["on"] & pres)
+            lv = _COMBO_SEP.join(_COMBO_LEVEL_LABELS[l] for l in st["levels"])
+            summ.setText(
+                f"{lv}: {len(pres)} combination"
+                f"{'s' if len(pres) != 1 else ''}, {n_on} with a symbol of "
+                "their own · color: "
+                + ("own per combination" if st["use_colors"]
+                   else "from 3 · Color by"))
+
+        def _open():
+            if self._combo_symbols_editor(btn.window(), st):
+                refresh()
+                for fn in list(on_change):
+                    fn()
+        btn.clicked.connect(lambda *_a: _open())
+        refresh()
+
+        def read():
+            pres = _present()
+            on = [l for l in self._combo_order(st["on"] & pres, st["levels"])]
+            return {"levels": list(st["levels"]),
+                    "markers": {l: st["mk"].get(l, "o") for l in on},
+                    "colors": {l: st["col"][l] for l in on if st["col"].get(l)},
+                    "sizes": {l: float(st["size"][l]) for l in on
+                              if st["size"].get(l)},
+                    "alphas": {l: float(st["alpha"][l]) for l in on
+                               if st["alpha"].get(l)},
+                    "use_colors": bool(st["use_colors"])}
+        return box, {"read": read, "state": st, "open": _open,
+                     "use_colors": lambda: bool(st["use_colors"]),
+                     "on_change": on_change, "refresh": refresh}
+
+    _COMBO_PALETTE = ("#1f77b4", "#d62728", "#2ca02c", "#ff7f0e", "#9467bd",
+                      "#8c564b", "#e377c2", "#17becf", "#bcbd22", "#7f7f7f",
+                      "#000000", "#ffffff")
+
+    def _combo_symbols_editor(self, parent, st, exec_=True):
+        """La ventana "Symbols by texture combination" (2026-10-26, pedido de
+        Guillermo). Una fila por combinación PRESENTE, en el orden del
+        catálogo de Textures; una columna por nivel, a lo ancho que haga
+        falta (los nombres se leen completos); n; símbolo (con los de
+        zircón); color, tamaño y opacidad propios; y una vista previa.
+        Edita una COPIA de `st` y la devuelve a `st` solo con OK. Con
+        `exec_=False` devuelve el diálogo sin mostrarlo (pruebas)."""
+        import copy as _cp
+        w = _cp.deepcopy({k: v for k, v in st.items()})
+        dlg = QDialog(parent)
+        dlg.setWindowTitle("Symbols by texture combination")
+        dlg.setStyleSheet(STYLE)
+        dlg.resize(940, 580)
+        lay = QVBoxLayout(dlg)
+        lay.setContentsMargins(14, 14, 14, 14)
+        lay.setSpacing(8)
+        top = QHBoxLayout()
+        top.setSpacing(10)
+        _cap = QLabel("Levels:")
+        _cap.setStyleSheet("color:#4a6a8a; font-size:12px; "
+                           "background:transparent;")
+        top.addWidget(_cap)
+        cols = self._combo_cols()
+        lv_checks = {}
+        for lvl in _COMBO_LEVELS:
+            cb = QCheckBox(_COMBO_LEVEL_LABELS[lvl])
+            cb.setChecked(lvl in w["levels"])
+            cb.setEnabled(cols.get(lvl) is not None)
+            lv_checks[lvl] = cb
+            top.addWidget(cb)
+        top.addStretch()
+        use_chk = QCheckBox("Use these colors")
+        use_chk.setChecked(bool(w["use_colors"]))
+        use_chk.setToolTip(
+            "On: each ticked combination is drawn in its own color and "
+            "'3 · Color by' (sample, set, ramp…) is turned off. Off: the "
+            "color comes from '3 · Color by', as usual.")
+        top.addWidget(use_chk)
+        lay.addLayout(top)
+
+        tbl = QTableWidget(0, 0)
+        tbl.verticalHeader().setVisible(False)
+        tbl.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        tbl.setWordWrap(True)
+        lay.addWidget(tbl, 1)
+        hint = QLabel(
+            "Ticked: a symbol of its own. Size and opacity: Auto = the ones "
+            "of 2 · Marker settings. The order is the one of the Textures "
+            "window — drag its rows there to change it.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet(_HINT_QSS)
+        lay.addWidget(hint)
+        bot = QHBoxLayout()
+        b_all = QPushButton("Tick all")
+        b_none = QPushButton("Untick all")
+        for b in (b_all, b_none):
+            b.setObjectName("smallBtn")
+            bot.addWidget(b)
+        bot.addStretch()
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
+                              | QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        bot.addWidget(bb)
+        lay.addLayout(bot)
+        codes = [c for _l, c in self._MARKER_ITEMS]
+        rows = []                      # [(label, widgets dict)]
+
+        def levels():
+            return [l for l in _COMBO_LEVELS if lv_checks[l].isChecked()]
+
+        def _proposed():
+            used = {w["mk"].get(l) for l in w["on"]}
+            return next((c for c in codes if c not in used), codes[0])
+
+        def _auto_color(i):
+            return self._COMBO_PALETTE[i % len(self._COMBO_PALETTE)]
+
+        def _sync_row(lab, ws):
+            on = lab in w["on"]
+            for k in ("mk", "size", "alpha"):
+                ws[k].setEnabled(on)
+            ws["col"].setEnabled(on and use_chk.isChecked())
+            colr = (w["col"].get(lab) if use_chk.isChecked()
+                    else None) or "#1a2a3a"
+            ws["col"].setStyleSheet(
+                f"QPushButton {{ background:{w['col'].get(lab) or '#ffffff'};"
+                " border:1px solid #888; border-radius:3px; }"
+                if use_chk.isChecked() else
+                "QPushButton { background:#f0f0f2; border:1px solid #ccc;"
+                " border-radius:3px; }")
+            if on:
+                ic = _marker_icon(w["mk"].get(lab, "o"), size=22, color=colr,
+                                  alpha=(w["alpha"].get(lab) or 1.0))
+            else:
+                ic = _marker_icon("o", size=10, color="#9aa6b2")
+            ws["prev"].setPixmap(ic.pixmap(22, 22))
+
+        def fill():
+            lv = levels()
+            if not lv:
+                lv_checks["types"].setChecked(True)
+                return                 # el toggled vuelve a llamar a fill
+            w["levels"] = lv
+            counts = self._combo_counts(lv)
+            labs = self._combo_order(list(counts), lv)
+            heads = ([""] + [_COMBO_LEVEL_LABELS[l] for l in lv]
+                     + ["n", "Symbol", "Color", "Size", "Opacity", ""])
+            tbl.setRowCount(0)
+            tbl.clear()
+            tbl.setColumnCount(len(heads))
+            tbl.setHorizontalHeaderLabels(heads)
+            tbl.setRowCount(len(labs))
+            rows.clear()
+            nl = len(lv)
+            for i, lab in enumerate(labs):
+                parts = lab.split(_COMBO_SEP)
+                ck = QCheckBox()
+                ck.setChecked(lab in w["on"])
+                ck.setStyleSheet("QCheckBox { margin-left: 6px; "
+                                 "background: transparent; }")
+                tbl.setCellWidget(i, 0, ck)
+                for j, v in enumerate(parts):
+                    it = QTableWidgetItem(v)
+                    it.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                    it.setData(Qt.ItemDataRole.UserRole, lab)
+                    if v == _COMBO_EMPTY:
+                        it.setForeground(QColor("#9aa6b2"))
+                    tbl.setItem(i, 1 + j, it)
+                nit = QTableWidgetItem(str(sum(counts[lab].values())))
+                nit.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                nit.setTextAlignment(int(Qt.AlignmentFlag.AlignRight
+                                         | Qt.AlignmentFlag.AlignVCenter))
+                tbl.setItem(i, 1 + nl, nit)
+                mk = QComboBox()
+                self._apply_combo_style(mk, font_size=11)
+                for _l, c in self._MARKER_ITEMS:
+                    mk.addItem(_marker_icon(c, size=16), _l, c)
+                if lab not in w["mk"]:
+                    w["mk"][lab] = _proposed() if lab in w["on"] else "o"
+                mk.setCurrentIndex(max(0, mk.findData(w["mk"][lab])))
+                tbl.setCellWidget(i, 2 + nl, mk)
+                colb = QPushButton("")
+                colb.setFixedSize(34, 20)
+                colb.setToolTip("Color of this combination (with 'Use these "
+                                "colors').")
+                tbl.setCellWidget(i, 3 + nl, colb)
+                sz = QDoubleSpinBox()
+                sz.setRange(0.0, 30.0)
+                sz.setSingleStep(0.5)
+                sz.setDecimals(1)
+                sz.setSpecialValueText("Auto")
+                sz.setValue(float(w["size"].get(lab) or 0.0))
+                tbl.setCellWidget(i, 4 + nl, sz)
+                al = QSpinBox()
+                al.setRange(0, 100)
+                al.setSuffix(" %")
+                al.setSpecialValueText("Auto")
+                al.setValue(int(round(100 * float(w["alpha"].get(lab) or 0))))
+                tbl.setCellWidget(i, 5 + nl, al)
+                prev = QLabel()
+                prev.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                prev.setStyleSheet("background: transparent;")
+                tbl.setCellWidget(i, 6 + nl, prev)
+                ws = {"ck": ck, "mk": mk, "col": colb, "size": sz,
+                      "alpha": al, "prev": prev}
+                rows.append((lab, ws))
+
+                def _on_ck(on, l=lab, ws=ws):
+                    if on:
+                        w["on"].add(l)
+                        if w["mk"].get(l, "o") == "o" and l not in st["mk"]:
+                            w["mk"][l] = _proposed()
+                            ws["mk"].setCurrentIndex(
+                                max(0, ws["mk"].findData(w["mk"][l])))
+                        if use_chk.isChecked() and not w["col"].get(l):
+                            w["col"][l] = _auto_color(len(w["on"]) - 1)
+                    else:
+                        w["on"].discard(l)
+                    _sync_row(l, ws)
+                ck.toggled.connect(_on_ck)
+                mk.currentIndexChanged.connect(
+                    lambda _i, l=lab, ws=ws: (w["mk"].__setitem__(
+                        l, ws["mk"].currentData()), _sync_row(l, ws)))
+                sz.valueChanged.connect(
+                    lambda v, l=lab: w["size"].__setitem__(l, float(v) or None))
+                al.valueChanged.connect(
+                    lambda v, l=lab, ws=ws: (w["alpha"].__setitem__(
+                        l, (v / 100.0) or None), _sync_row(l, ws)))
+
+                def _on_col(_c=False, l=lab, ws=ws):
+                    c = self._pick_color(w["col"].get(l), "Combination color",
+                                         dlg)
+                    if c:
+                        w["col"][l] = c
+                        _sync_row(l, ws)
+                colb.clicked.connect(_on_col)
+                _sync_row(lab, ws)
+            hh = tbl.horizontalHeader()
+            hh.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+            tbl.resizeColumnsToContents()
+            tbl.setColumnWidth(0, 30)
+            tbl.setColumnWidth(2 + nl, max(250, tbl.columnWidth(2 + nl)))
+            tbl.setColumnWidth(3 + nl, 46)
+            tbl.setColumnWidth(6 + nl, 40)
+            tbl.resizeRowsToContents()
+
+        def _use_toggled(on):
+            if on:
+                for i, lab in enumerate(self._combo_order(
+                        [l for l, _ws in rows if l in w["on"]], w["levels"])):
+                    if not w["col"].get(lab):
+                        w["col"][lab] = _auto_color(i)
+            for lab, ws in rows:
+                _sync_row(lab, ws)
+        use_chk.toggled.connect(_use_toggled)
+        for cb in lv_checks.values():
+            cb.toggled.connect(lambda *_a: fill())
+        # (Con "Use these colors" ya encendido, los colores automáticos que
+        # usa el gráfico —la paleta, en el orden del catálogo— se ven desde
+        # que se abre: ver abajo.)
+        b_all.clicked.connect(lambda *_a: [ws["ck"].setChecked(True)
+                                           for _l, ws in rows])
+        b_none.clicked.connect(lambda *_a: [ws["ck"].setChecked(False)
+                                            for _l, ws in rows])
+        fill()
+        if use_chk.isChecked():
+            _use_toggled(True)
+        dlg._combo_table = tbl
+        dlg._combo_rows = rows
+        dlg._combo_use = use_chk
+        dlg._combo_levels = lv_checks
+
+        def _commit():
+            w["use_colors"] = use_chk.isChecked()
+            st.clear()
+            st.update(w)
+        dlg._combo_commit = _commit
+        if not exec_:
+            return dlg
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return False
+        _commit()
+        return True
+
+    def _combo_order(self, labels, levels):
+        """Las combinaciones en el ORDEN DEL CATÁLOGO de Textures (2026-10-26,
+        pedido de Guillermo: los "Rim…" juntos y los "Core…" juntos, como él
+        los ordene arrastrando): nivel por nivel; un valor fuera del
+        catálogo va después, y "—" al final."""
+        idx = {l: {e.get("name"): i for i, e in
+                   enumerate(self._texture_entries(l))} for l in levels}
+
+        def key(lab):
+            out = []
+            for lvl, v in zip(levels, str(lab).split(_COMBO_SEP)):
+                if v == _COMBO_EMPTY:
+                    out.append((2, 0, ""))
+                elif v in idx[lvl]:
+                    out.append((0, idx[lvl][v], ""))
+                else:
+                    out.append((1, 0, v))
+            return tuple(out)
+        return sorted(labels, key=key)
+
     def _grain_marker_block(self, dlg, style0, marker_by,
-                            options=("same", "sample", "set",
-                                     "position", "type"),
-                            size_default="auto"):
+                            options=("same", "sample", "set", "shape",
+                                     "position", "type", "combo"),
+                            size_default="auto", combo_cfg=None):
         """Tamaño, opacidad y FORMA de los granos (paso 2 · Marker settings).
         La forma es UNA elección exclusiva entre `options`; el combo de forma
         vive dentro de "The same for every grain" y sirve de respaldo (un set
@@ -52904,7 +55022,9 @@ class MainWindow(QMainWindow):
         lay.addWidget(cap)
         dyn = self.data_table.dynamic_cols
         has = {"position": any(h == "Position" for h, _, _ in dyn),
-               "type": any(h == "Texture\nType" for h, _, _ in dyn)}
+               "type": any(h == "Texture\nType" for h, _, _ in dyn),
+               "shape": any(h == "Grain shape" for h, _, _ in dyn)}
+        has["combo"] = has["position"] or has["type"] or has["shape"]
         tips = {
             "sample": "Each sample its own symbol — the one it has in every "
                       "other plot, or the one you picked under Color by ▸ "
@@ -52925,6 +55045,16 @@ class MainWindow(QMainWindow):
                      "Requires the Texture Type column in Table 1: enable "
                      "textures (with Texture type options) in the "
                      "Textures window and press Apply."),
+            "shape": ("The symbol of each grain shape (editable in the "
+                      "Textures window).\nGrains with no shape → smaller "
+                      "neutral marker." if has["shape"] else
+                      "Requires the Grain shape column in Table 1: enable "
+                      "textures in the Textures window and press Apply."),
+            "combo": ("Combine grain shape, position and texture type: give "
+                      "a symbol only to the combinations you tick (e.g. Core "
+                      "▸ Homogeneous dark)." if has["combo"] else
+                      "Requires the texture columns in Table 1: enable "
+                      "textures in the Textures window and press Apply."),
         }
         grp = QButtonGroup(dlg)
         rbs = {}
@@ -52962,10 +55092,15 @@ class MainWindow(QMainWindow):
         note.setStyleSheet("color:#c0392b; font-size:11px; "
                            "background:transparent;")
         note.hide()
+        combo_box = combo_api = None
+        if "combo" in options:                # M17
+            combo_box, combo_api = self._combo_marker_panel(combo_cfg)
         for key in options:
             lay.addWidget(rbs[key])
             if key == "same":
                 lay.addWidget(same_box)
+            if key == "combo" and combo_box is not None:
+                lay.addWidget(combo_box)
         lay.addWidget(note)
 
         cur = marker_by if marker_by in options else options[0]
@@ -52976,8 +55111,14 @@ class MainWindow(QMainWindow):
             note.show()
         rbs[cur].setChecked(True)
 
+        on_change = []
+
         def _sync(*_):
             same_box.setVisible("same" in rbs and rbs["same"].isChecked())
+            if combo_box is not None:
+                combo_box.setVisible(rbs["combo"].isChecked())
+            for fn in list(on_change):
+                fn()
         grp.idToggled.connect(lambda _i, on: on and _sync())
         grp.idClicked.connect(lambda _i: note.hide())
         _sync()
@@ -52985,6 +55126,8 @@ class MainWindow(QMainWindow):
         def read():
             out = {"marker_by": options[max(0, grp.checkedId())],
                    "marker_shape": shape.currentData()}
+            if combo_api is not None:
+                out["combo"] = combo_api["read"]()      # M17
             for key, e in edits.items():
                 # ⚠ FLOAT, no el texto: los builders hacen aritmética con el
                 # tamaño (§105). Vacío o "auto" → el default del gráfico.
@@ -52994,8 +55137,16 @@ class MainWindow(QMainWindow):
                 except ValueError:
                     out[key] = None
             return out
+        if combo_api is not None:           # 2026-10-26
+            combo_api["on_change"].append(_sync)
+
+        def combo_colors():
+            return bool(combo_api is not None and rbs["combo"].isChecked()
+                        and combo_api["use_colors"]())
         return box, {"read": read, "radios": rbs, "group": grp,
-                     "note": note, "edits": edits, "shape": shape}
+                     "note": note, "edits": edits, "shape": shape,
+                     "on_change": on_change, "combo_colors": combo_colors,
+                     "combo_api": combo_api}
 
     @staticmethod
     def _colorby_place_var(var_box, anchor):
@@ -54617,7 +56768,7 @@ class MainWindow(QMainWindow):
             def _finalize(_o=_orig, _ax=ax, _sk=style_key, _lg=leg):
                 _o()
                 self._capture_legend_position(_ax, _sk, _lg)
-                self._p5_redraw_after_blit_drag(_ax.figure.canvas)
+                self._p5_redraw_after_blit_drag(_ax.figure.canvas, _lg)
             dl.finalize_offset = _finalize
         # Handlers del canvas (hover/doble-clic de leyenda + arrastre de rótulos
         # §58) centralizados en un solo juego por canvas; el método del diálogo
@@ -55392,9 +57543,23 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-    def _p5_redraw_after_blit_drag(self, canvas):
+    def _p5_redraw_after_blit_drag(self, canvas, artist=None):
         """Al soltar un arrastre con foto: el gráfico completo una vez (la
-        foto del arrastre no tenía lo arrastrado)."""
+        foto del arrastre no tenía lo arrastrado).
+
+        2026-10-24 (M6, reporte de Guillermo: "al soltar la leyenda
+        desaparece y luego reaparece sola"): se llama desde `finalize_offset`
+        y, en matplotlib, `on_release` hace DESPUÉS `canvas.blit()` — que en
+        Qt dispara un paintEvent que ejecuta YA el redibujo pendiente — y
+        recién entonces `set_animated(False)`. El dibujo completo salía con la
+        leyenda todavía "animada", o sea SIN ella, y como consumía el
+        pendiente nadie la volvía a pintar. Por eso se le quita aquí la
+        marca, antes de ese blit."""
+        if artist is not None:
+            try:
+                artist.set_animated(False)
+            except Exception:
+                pass
         if self._p5_blit_ok(canvas):
             try:
                 canvas.draw_idle()
@@ -56247,7 +58412,7 @@ class MainWindow(QMainWindow):
                          _sk=style_key):
                     _o()
                     self._capture_detached_box(_ax, _sk, _lb, _k)
-                    self._p5_redraw_after_blit_drag(_ax.figure.canvas)
+                    self._p5_redraw_after_blit_drag(_ax.figure.canvas, _lb)
                 dl.finalize_offset = _fin
             self._ensure_p5_canvas_handlers(fig.canvas)
 
@@ -57697,6 +59862,11 @@ class MainWindow(QMainWindow):
         """De quién es la config plana de esa pestaña con esta config: el
         nombre de la muestra en los modos por muestra; "__all__" en los
         combinados (y en el side-by-side)."""
+        if style_key == "tibox_style":          # 2026-10-24 (modo de texto)
+            if (cfg.get("tibox_primary") == "per_sample"
+                    and cfg.get("tibox_sample")):
+                return str(cfg.get("tibox_sample"))
+            return "__all__"
         keys = _P5_VIEW_SAMPLE_KEYS.get(style_key)
         if keys is None:
             return None
@@ -57864,6 +60034,15 @@ class MainWindow(QMainWindow):
         """Escribe en la config QUÉ muestra (o el combinado) dibuja la
         pestaña, sin tocar nada más."""
         cfg = self._p5_cfg()
+        if style_key == "tibox_style":
+            # Radios del Settings de Ti: 0 = Per sample · 1 = All · 2 = Combined.
+            if per:
+                cfg["tibox_sample"] = sample
+                cfg["tibox_primary"] = "per_sample"
+            elif cfg.get("tibox_primary") == "per_sample":
+                cfg["tibox_primary"] = {2: "combined"}.get(
+                    int(mode_id or 1), "all")
+            return
         mk, smk, mdef = _P5_VIEW_SAMPLE_KEYS[style_key]
         try:
             cur = int(cfg.get(mk, mdef) or 0)
@@ -58216,7 +60395,7 @@ class MainWindow(QMainWindow):
                 # 2026-09-27 (pedido de Guillermo): SOLO la tuerca, sin texto —
                 # un botón de ícono como los demás de la barra (marcado = el
                 # Settings está abierto, mismo tinte azul que el riel).
-                self._p5_icon_btn(ref, "gear")
+                self._p5_icon_btn(ref, "gear", label="Settings")
                 ref.setToolTip("Settings — what this diagram shows and how it "
                                "looks (click again to close).")
                 # 2026-09-24: Settings es una ventana flotante y la tuerca la
@@ -58239,7 +60418,7 @@ class MainWindow(QMainWindow):
             # de ser #actionBtn y pasa a botón de ícono como los demás. Se
             # guarda en un registro porque ya no se puede encontrar por su
             # texto (`_p5_plot_btns`, lo usa `_p5_install_diagram_combos`).
-            self._p5_icon_btn(plot, "p5_plot")
+            self._p5_icon_btn(plot, "p5_plot", label="Plot")
             plot.setToolTip("Plot it! — draw this diagram (applies what is "
                             "pending in its Settings first).")
             if not hasattr(self, "_p5_plot_btns"):
@@ -58306,7 +60485,7 @@ class MainWindow(QMainWindow):
             _ttl.setObjectName("panelTitle")
             strip.set_leading(_ttl)
             _comp = QPushButton(strip)
-            self._p5_icon_btn(_comp, "p5_compose")
+            self._p5_icon_btn(_comp, "p5_compose", label="Compose")
             _comp.setToolTip(
                 "Compose figure — assemble several diagrams into ONE "
                 "publication figure (a) b) c) panels, vector PDF/SVG export).")
@@ -58372,15 +60551,75 @@ class MainWindow(QMainWindow):
                     pass
 
     @staticmethod
-    def _p5_icon_btn(btn, key, alpha=1.0):
+    def _apply_toolbar_labels(toolbar):
+        """M11: Reset · Drag · Zoom de la barra de matplotlib con su rótulo
+        (o sin él), todos del MISMO ancho para que la barra se vea pareja."""
+        acts = getattr(toolbar, "_p5_label_acts", None) or []
+        if not acts:
+            return
+        if _P5_BTN_LABELS["on"]:
+            _pms = [_icon_label_pixmap(k, t) for _a, k, t in acts]
+            _w = max(int(round(pm.width() / pm.devicePixelRatio()))
+                     for pm in _pms)
+            _h = max(int(round(pm.height() / pm.devicePixelRatio()))
+                     for pm in _pms)
+            for a, k, t in acts:
+                a.setIcon(QIcon(_icon_label_pixmap(k, t, min_w=_w)))
+            toolbar.setIconSize(QSize(_w, _h))
+        else:
+            for a, k, _t in acts:
+                a.setIcon(QIcon(_rail_icon_pixmap(k, 18)))
+            toolbar.setIconSize(QSize(18, 18))
+
+    def _set_button_labels(self, on):
+        """View ▸ Show button labels (M11): se guarda en la APP y se rehacen
+        al momento todos los botones con rótulo — también los de las tablas
+        separadas en su propia ventana (por eso `allWidgets`)."""
+        on = bool(on)
+        _P5_BTN_LABELS["on"] = on
+        try:
+            _app_settings().setValue("button_labels", on)
+        except Exception:
+            pass
+        for w in QApplication.allWidgets():
+            try:
+                if (isinstance(w, QPushButton)
+                        and w.objectName() == "p5IconBtn"
+                        and w.property("p5Label")):
+                    self._p5_icon_btn(w, w.property("p5Icon"),
+                                      alpha=float(w.property("p5IconAlpha")
+                                                  or 1.0))
+                elif isinstance(w, NavigationToolbar):
+                    self._apply_toolbar_labels(w)
+            except RuntimeError:
+                pass
+
+    @staticmethod
+    def _p5_icon_btn(btn, key, alpha=1.0, label=None):
         """Botón de ícono de la barra de Panel 5 en el idioma del riel: sin
         marco, ícono dibujado (`_rail_icon_pixmap`), 30×28. Se llama también
-        para CAMBIAR el ícono (🔒 abierto/cerrado)."""
+        para CAMBIAR el ícono (🔒 abierto/cerrado).
+
+        M11 (2026-10-25): con `label` (o el que el botón ya tenía) y los
+        rótulos encendidos, el rótulo va DEBAJO del ícono, dibujado en la
+        misma imagen (`_icon_label_pixmap`); el botón crece a lo que mida."""
         btn.setObjectName("p5IconBtn")
         btn.setText("")
-        btn.setIcon(QIcon(_rail_icon_pixmap(key, 18, alpha=alpha)))
-        btn.setIconSize(QSize(18, 18))
-        btn.setFixedSize(30, 28)
+        if label is not None:
+            btn.setProperty("p5Label", label)
+        btn.setProperty("p5IconAlpha", float(alpha))
+        _lbl = btn.property("p5Label") if _P5_BTN_LABELS["on"] else None
+        if _lbl:
+            _pm = _icon_label_pixmap(key, _lbl, alpha=alpha)
+            _w = int(round(_pm.width() / _pm.devicePixelRatio()))
+            _h = int(round(_pm.height() / _pm.devicePixelRatio()))
+            btn.setIcon(QIcon(_pm))
+            btn.setIconSize(QSize(_w, _h))
+            btn.setFixedSize(max(30, _w + 8), _h + 8)
+        else:
+            btn.setIcon(QIcon(_rail_icon_pixmap(key, 18, alpha=alpha)))
+            btn.setIconSize(QSize(18, 18))
+            btn.setFixedSize(30, 28)
         btn.setProperty("p5Icon", key)
         # Hoja PROPIA: varios contenedores de Tabla 1/2 llevan un
         # "background: transparent" sin selector que cascadea y le quitaría
@@ -58390,7 +60629,7 @@ class MainWindow(QMainWindow):
     def _make_p5_freeze_btn(self, style_key):
         """Botón 🔒 (checkable) para la action bar de una pestaña de Panel 5."""
         btn = QPushButton()
-        self._p5_icon_btn(btn, "p5_unlock")
+        self._p5_icon_btn(btn, "p5_unlock", label="Freeze")
         btn.setCheckable(True)
         btn.setToolTip(
             "Freeze this graph's framing (zoom/pan). While frozen, re-plotting "
@@ -58497,7 +60736,7 @@ class MainWindow(QMainWindow):
 
     def _make_p5_fixed_btn(self, style_key):
         btn = QPushButton()
-        self._p5_icon_btn(btn, "p5_fix")
+        self._p5_icon_btn(btn, "p5_fix", label="Size")
         btn.setCheckable(True)
         btn.setToolTip(
             "Fix the diagram at its CURRENT size — enlarging the panel or the "
@@ -58524,10 +60763,8 @@ class MainWindow(QMainWindow):
         lay = parent.layout() if parent is not None else None
         if size:
             canvas.setFixedSize(int(size[0]), int(size[1]))
-            if lay is not None:
-                lay.setAlignment(canvas,
-                                 Qt.AlignmentFlag.AlignHCenter
-                                 | Qt.AlignmentFlag.AlignTop)
+            if lay is not None:     # (M1: centrado también en vertical)
+                lay.setAlignment(canvas, Qt.AlignmentFlag.AlignCenter)
         else:
             canvas.setMinimumSize(0, 0)
             canvas.setMaximumSize(16777215, 16777215)   # QWIDGETSIZE_MAX
@@ -58750,8 +60987,10 @@ class MainWindow(QMainWindow):
         sc.setWidgetResizable(True)
         sc.setFrameShape(QFrame.Shape.NoFrame)
         sc.setStyleSheet("QScrollArea { background: #ffffff; border: none; }")
-        sc.setAlignment(Qt.AlignmentFlag.AlignHCenter
-                        | Qt.AlignmentFlag.AlignTop)
+        # 2026-10-24 (M1, Guillermo): centrado también en VERTICAL — un
+        # gráfico alargado y fijo se quedaba pegado arriba al agrandar la
+        # ventana.
+        sc.setAlignment(Qt.AlignmentFlag.AlignCenter)
         sc.setWidget(canvas)
         canvas.installEventFilter(
             _P5ScrollWheelFilter(sc, mw=self, style_key=style_key))
@@ -58832,7 +61071,7 @@ class MainWindow(QMainWindow):
 
     def _make_p5_detach_btn(self, style_key):
         btn = QPushButton()
-        self._p5_icon_btn(btn, "p5_detach")
+        self._p5_icon_btn(btn, "p5_detach", label="Detach")
         btn.setToolTip(
             "Open this diagram in its own resizable window (roomier for tall "
             "stacked plots). Close the window to bring it back to the tab.")
@@ -59765,6 +62004,7 @@ class MainWindow(QMainWindow):
             arrowstyle=("-|>" if arrow else "-"),
             mutation_scale=(head if arrow else 1.0),
             color=color, lw=width, zorder=25, shrinkA=0, shrinkB=0,
+            linestyle=_p5_line_style(a),                # M3
             clip_on=False)
         return p
 
@@ -60255,6 +62495,13 @@ class MainWindow(QMainWindow):
                     act.setText(label)
                 act.setToolTip(tip)
                 act.setIcon(QIcon(_rail_icon_pixmap(_mpl_icons[key], 18)))
+        # M11: su rótulo corto bajo el ícono (el TEXTO de la acción no cambia:
+        # hay código y pruebas que la buscan como "Reset view").
+        toolbar._p5_label_acts = [
+            (actions_by_key[k], _mpl_icons[k], t)
+            for k, t in (("home", "Reset"), ("pan", "Drag"), ("zoom", "Zoom"))
+            if actions_by_key.get(k) is not None]
+        self._apply_toolbar_labels(toolbar)
  
         # ── 4. Fallback por texto (por si una versión usa otras claves) ──────
         # Solo toca lo que aún tenga el nombre nativo, para no re-renombrar.
@@ -60271,7 +62518,7 @@ class MainWindow(QMainWindow):
         if style_key is not None:
             home_act = actions_by_key.get("home")
             fit_btn = QPushButton()
-            self._p5_icon_btn(fit_btn, "p5_fit")
+            self._p5_icon_btn(fit_btn, "p5_fit", label="Fit")
             fit_btn.setProperty("p5Fit", True)
             fit_btn.setToolTip(
                 "Fit the diagram to the panel — undoes Ctrl/⌘+scroll zoom and "
@@ -60478,8 +62725,8 @@ class MainWindow(QMainWindow):
         "trace": ("trace_active", "trace_elements", "trace_se", "th_mode",
                   "th_ratio_submode", "ree_active", "ree_mode",
                   "neg_values_mode"),
-        "textures": ("textures_active", "textures_positions",
-                     "textures_types"),
+        "textures": ("textures_active", "textures_shapes",
+                     "textures_positions", "textures_types"),
         "hf": ("hf_active", "hf_mode", "hf_manual_include_extras",
                "hf_age_manual"),
     }
@@ -60549,7 +62796,7 @@ class MainWindow(QMainWindow):
     def _build_t1_gear(self):
         from PyQt6.QtGui import QActionGroup
         btn = QPushButton()
-        self._p5_icon_btn(btn, "gear")
+        self._p5_icon_btn(btn, "gear", label="Settings")
         btn.setToolTip("Table 1 settings — which value wins when a row "
                        "brings two versions of the same thing, negative "
                        "trace values, and what is shown.")
@@ -60733,13 +62980,18 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Create or open a project first.",
                                          4000)
             return
+        # 2026-10-26: lo de Tabla 1 al modelo, para contar bien las huérfanas.
+        self._capture_table_into_samples()
+        self._rebuild_texture_checkbox_lists()
         dlg, _content, bb = self._make_panel4_dialog(
             "Textures", floating=True, input_key="textures", calc=False)
         dlg.setMinimumWidth(320)
         _hint = QLabel(
             "Tick the positions and texture types you work with: they are "
             "the options of the Position and Texture Type cells of Table 1. "
-            "Values found when importing are ticked automatically.")
+            "Values found when importing are ticked automatically. Drag a "
+            "row to change the order (menus, legends and combinations "
+            "follow it).")
         _hint.setWordWrap(True)
         _hint.setStyleSheet(_HINT_QSS)   # Ola 17 · L13
         dlg.layout().insertWidget(0, _hint)
@@ -60812,6 +63064,14 @@ class MainWindow(QMainWindow):
         self._p4_pill_ti.setVisible(ti_active)
         if not ti_active and getattr(self, "_p4_active_summary", None) == "ti":
             self._p4_select_summary("wmean")   # §Ola12: pasa a otra pestaña
+        # M17: la de Textures, si Tabla 1 tiene alguna columna de textura.
+        _tp = getattr(self, "_p4_pill_tex", None)
+        if _tp is not None:
+            has_tex = any(c is not None for c in self._combo_cols().values())
+            _tp.setVisible(has_tex)
+            if (not has_tex
+                    and getattr(self, "_p4_active_summary", None) == "tex"):
+                self._p4_select_summary("wmean")
 
     def _p4_select_summary(self, key):
         """Elige qué resultado se ve en la ventana de resultados.
@@ -61013,8 +63273,10 @@ class MainWindow(QMainWindow):
         disc_sub_layout.addWidget(disc_type_lbl)
 
         disc_group = QButtonGroup(dlg)
-        rb_disc_76  = QRadioButton("6/38 vs 7/6 (classic, recommended)")
-        rb_disc_735 = QRadioButton("6/38 vs 7/35 (useful for young zircons)")
+        # 2026-10-24 (Guillermo): sin los paréntesis — lo que decían ya lo
+        # explican los tooltips.
+        rb_disc_76  = QRadioButton("6/38 vs 7/6")
+        rb_disc_735 = QRadioButton("6/38 vs 7/35")
         rb_disc_76.setStyleSheet("QRadioButton { font-size: 12px; }")
         rb_disc_735.setStyleSheet("QRadioButton { font-size: 12px; }")
         rb_disc_76.setToolTip(
@@ -61481,6 +63743,39 @@ class MainWindow(QMainWindow):
         _excl_cfg_row.addStretch()
         _excl_box_l.addLayout(_excl_cfg_row)
 
+        # M5 (2026-10-25, decisiones de Guillermo): los outliers QUÍMICOS de Ti
+        # también salen de las edades. Solo con el rechazo de outliers de
+        # Ti-in-zircon thermometry encendido; la química va ANTES del rechazo
+        # estadístico de edades.
+        _ti_rej_on = bool(cfg_current.get("ti_reject_outliers", False))
+        chem_check = QCheckBox("+ also exclude chemical outliers (Ti)")
+        chem_check.setStyleSheet("QCheckBox { font-size: 12px; }")
+        chem_check.setChecked(bool(cfg_current.get("exclude_ti_outliers", False))
+                              and _ti_rej_on)
+        chem_check.setToolTip(
+            "Analyses flagged as Ti outliers in Ti-in-zircon thermometry (for\n"
+            "example, an inclusion of another mineral) are also left out of the\n"
+            "ages, Table 2's means and the diagrams. They are removed BEFORE the\n"
+            "statistical age-outlier test, like any analytical-quality filter.\n\n"
+            "Caution: Ti can differ between crystallographic sectors of one\n"
+            "zircon (Rubatto 2017, citing Tailby et al. 2011) — an outlier is not\n"
+            "always an inclusion.")
+        _chem_row = QHBoxLayout()
+        _chem_row.setContentsMargins(_DLG_STEP, 0, 0, 0)
+        _chem_row.addWidget(chem_check)
+        _chem_row.addStretch()
+        _excl_box_l.addLayout(_chem_row)
+        _chem_note = QLabel("Turn on outlier rejection in Ti-in-zircon "
+                            "thermometry to use it.")
+        _chem_note.setWordWrap(True)
+        _chem_note.setStyleSheet(_HINT_QSS)
+        _chem_note.setContentsMargins(_DLG_STEP + 22, 0, 0, 0)
+        _excl_box_l.addWidget(_chem_note)
+        # (DESPUÉS de meterla al layout: setVisible sobre un widget sin padre
+        # crea una ventana fantasma, §112 — lo cazó test_no_phantom_windows.)
+        if _ti_rej_on:
+            _chem_note.hide()
+
         def _refresh_excl_summary():
             c = wmean_excl_state["criterion"]
             txt = _excl_crit_labels.get(c, c)
@@ -61492,6 +63787,7 @@ class MainWindow(QMainWindow):
         def _on_wmean_excl_toggled(checked):
             wmean_excl_summary.setEnabled(checked)
             wmean_excl_btn.setEnabled(checked)
+            chem_check.setEnabled(checked and _ti_rej_on)        # M5
         wmean_excl_check.toggled.connect(_on_wmean_excl_toggled)
         _on_wmean_excl_toggled(wmean_excl_initial)
 
@@ -62146,6 +64442,10 @@ class MainWindow(QMainWindow):
             # está off o bajo "any" (ahí ya está incluido). Así la config nunca
             # persiste una combinación imposible.
             cfg["wmean_exclude_enabled"] = wmean_excl_check.isChecked()
+            # M5: solo vale con el rechazo de Ti encendido (se lee EN VIVO: el
+            # diálogo de Ti pudo cambiarlo mientras este seguía abierto).
+            cfg["exclude_ti_outliers"] = bool(
+                chem_check.isChecked() and cfg.get("ti_reject_outliers", False))
             _excl_crit = wmean_excl_state["criterion"]
             _p_active = compute_conc_check.isChecked() and use_p_check.isChecked()
             if _excl_crit == "p" and not _p_active:
@@ -63231,6 +65531,17 @@ class MainWindow(QMainWindow):
         if active_samples:
             sample_combo.setCurrentIndex(0)
             _load_sample_params(active_samples[0])
+
+        # 2026-10-24 (reporte de Guillermo): P, aTiO₂ y aSiO₂ viven en cada
+        # muestra, FUERA de panel4_config, y cada campo los guarda al salir
+        # de él — antes del Apply. La guarda de no-op de _p4_float_dialog
+        # solo mira panel4_config, así que Apply "no cambiaba nada" y Tabla 2
+        # se quedaba sin temperaturas hasta tocar Uncertainty mode. Se
+        # compara contra lo que había al abrir (o en el último Apply).
+        def _params_now():
+            return {s["name"]: dict(s.get("thermometry_params") or {})
+                    for s in proj["samples"]}
+        state["applied_params"] = _params_now()
         # Ola 17 · L13: títulos planos → secciones plegables (opción A).
         self._p4_sectionize(
             subpanel_layout, "ti",
@@ -63246,7 +65557,11 @@ class MainWindow(QMainWindow):
         
             # Guardar última muestra editada
             _save_current_sample_params()
-        
+            _p_now = _params_now()
+            if _p_now != state["applied_params"]:
+                state["applied_params"] = _p_now
+                dlg._p4_extra_changed = True      # lo lee _p4_float_dialog
+
             # Persistir config global
             if proj.get("panel4_config") is None:
                 proj["panel4_config"] = {}
@@ -63256,6 +65571,11 @@ class MainWindow(QMainWindow):
             cfg["ti_uncertainty_mode"] = uncert_group.checkedId()
             cfg["ti_exclude_upb_excluded"] = ti_excl_check.isChecked()  # §13 E-Ti
             cfg["ti_reject_outliers"] = ti_ol_check.isChecked()         # §13 F
+            # M5 (decisión de Guillermo): sin rechazo de outliers de Ti, la
+            # exclusión química de U-Pb se DESMARCA — al volver a encenderlo,
+            # ninguna edad cambia sin pedirlo.
+            if not ti_ol_check.isChecked():
+                cfg["exclude_ti_outliers"] = False
             try:
                 cfg["ti_outlier_k"] = float(ti_k_combo.currentText())
             except (ValueError, TypeError):
@@ -63273,6 +65593,14 @@ class MainWindow(QMainWindow):
                 4000,
             )
 
+        # 2026-10-24 (Guillermo): abre con el alto que pide TODO desplegado
+        # (~460 px medidos). Con secciones plegadas salía tan bajo que, al
+        # abrir "Per-sample parameters", sus campos quedaban fuera de vista.
+        _h = max(dlg.sizeHint().height(), 480)
+        _scr = self.screen()
+        if _scr is not None:
+            _h = min(_h, int(_scr.availableGeometry().height() * 0.9))
+        dlg.resize(max(dlg.sizeHint().width(), 440), _h)
         self._p4_float_dialog("ti", dlg, _bb, _commit)
         return
 
@@ -63474,6 +65802,14 @@ class MainWindow(QMainWindow):
                     + (" (and insufficient precision)"
                        if p4.get("wmean_exclude_precise") else "")
                     + " were excluded from the weighted-mean calculations.")
+                # M5 (2026-10-25): la exclusión química de Ti.
+                if (p4.get("exclude_ti_outliers")
+                        and p4.get("ti_reject_outliers")):
+                    t.append(
+                        " Analyses whose Ti-in-zircon temperature was an "
+                        "outlier within its group (possible inclusions) were "
+                        "also excluded, before the statistical treatment of "
+                        "the ages.")
             if p4.get("reject_outliers"):
                 om = ("MSWD-based" if p4.get("outlier_method") == "mswd"
                       else f"{p4.get('outlier_k', 2)}σ")
@@ -63967,6 +66303,25 @@ class MainWindow(QMainWindow):
         self._refresh_t2_exclude_btn()
 
     def calculate_table2(self, *_args, autoplot=False, quiet=False):
+        """Recalcula el modelo (`_calculate_table2_core`) y mantiene VIGENTES
+        las reglas de rango de los sets (2026-10-24, decisión de Guillermo):
+        si con los datos nuevos alguna regla mueve granos de set, se escriben
+        sus celdas y se recalcula UNA vez más (las medias, los outliers y Ti
+        se agrupan por set). La segunda pasada no vuelve a revisar: las reglas
+        no dependen del set, así que ya no cambiarían nada."""
+        self._calculate_table2_core(autoplot=autoplot, quiet=quiet)
+        if self.__dict__.get("_set_rules_busy") or not self.current_project:
+            return
+        self.__dict__["_set_rules_busy"] = True
+        try:
+            msg = self._apply_all_set_rules(auto=True)
+            if msg:
+                self._calculate_table2_core(autoplot=autoplot, quiet=True)
+                self.statusBar().showMessage(msg, 10000)
+        finally:
+            self.__dict__["_set_rules_busy"] = False
+
+    def _calculate_table2_core(self, *_args, autoplot=False, quiet=False):
         """
         Construye Tabla 2 a partir de las filas válidas de Tabla 1.
         `autoplot` (keyword-only, T9 2026-07-17): solo True en el camino de
@@ -64340,6 +66695,10 @@ class MainWindow(QMainWindow):
             ti_outlier_k = float(p4_cfg.get("ti_outlier_k", 2.0))
         except (ValueError, TypeError):
             ti_outlier_k = 2.0
+        # M5 (2026-10-25): U-Pb ▸ Age discrimination ▸ "+ also exclude chemical
+        # outliers (Ti)". Solo vale con el rechazo de Ti encendido.
+        ti_chem_excl = bool(p4_cfg.get("exclude_ti_outliers", False)
+                            and ti_active and ti_reject_outliers)
 
         ti_col_map = {}
         ti_calib_idx        = 0
@@ -64502,6 +66861,9 @@ class MainWindow(QMainWindow):
         )
         _excl_outlier_active = p4_cfg.get("reject_outliers", False)
         _excl_precise_active = compute_reliability
+        # M5: la casilla química vive bajo "Exclude analyses from the weighted
+        # mean and the diagrams" y, como los demás criterios, depende de ella.
+        ti_chem_excl = ti_chem_excl and bool(wmean_exclude_enabled)
 
         # Acumulador de avisos defensivos para el widget. Casos posibles,
         # potencialmente simultáneos:
@@ -65473,6 +67835,55 @@ class MainWindow(QMainWindow):
         # `_samples_with_sets`); en las demás se promedian por muestra.
         _wm_set_samples = self._samples_with_sets()
 
+        # ── Rechazo de outliers de Ti (§13 Stage F), como función ────────────
+        # La usan dos caminos: el de siempre (abajo, tras las exclusiones U-Pb)
+        # y, con M5, uno TEMPRANO. `excluded_of(entry)` dice quién queda fuera
+        # de la población de Ti cuando el gate E-Ti está encendido.
+        def _ti_outlier_stage(excluded_of):
+            _ti_buckets = {}
+            for _ei, _entry in enumerate(self.calc_results):
+                if _entry["ti_t_c"] is None:
+                    continue
+                if ti_exclude_upb_excluded and excluded_of(_entry):
+                    continue
+                _ti_buckets.setdefault(
+                    self._canonical_bucket_key(_entry), []
+                ).append(_ei)
+            for _members in _ti_buckets.values():
+                _temps = [self.calc_results[_ei]["ti_t_c"] for _ei in _members]
+                _rej = self._reject_ti_outliers(_temps, ti_outlier_k)
+                for _li in _rej:
+                    self.calc_results[_members[_li]]["ti_is_outlier"] = True
+
+        # ── M5 (2026-10-25): outliers QUÍMICOS de Ti, ANTES de las edades ────
+        # Decisión de Guillermo ("química primero"): es control de calidad del
+        # análisis, como la discordancia — se detectan y se excluyen ANTES del
+        # rechazo estadístico de edades (Stage A, abajo) y de las medias. Con
+        # el gate E-Ti, su población solo deja fuera a los que fallan un
+        # criterio POR ANÁLISIS (manual, discordancia, P, precisión): los
+        # outliers estadísticos de edad se calculan después, así que no hay
+        # círculo. La Stage F de más abajo ya no los vuelve a calcular.
+        def _per_analysis_fail(e):
+            if self._manual_exclusion_reason(e):
+                return True
+            if not wmean_exclude_enabled:
+                return False
+            _p_fail = _excl_p_active and (e["is_low_p"] is True
+                                          or bool(e["conc_failed"]))
+            if wmean_exclude_criterion == "any":
+                return bool(e["is_discordant"] is True or _p_fail
+                            or (_excl_precise_active
+                                and e["is_imprecise"] is True))
+            return bool(
+                (wmean_exclude_criterion == "disc"
+                 and e["is_discordant"] is True)
+                or (wmean_exclude_criterion == "p"
+                    and (e["is_low_p"] is True or bool(e["conc_failed"])))
+                or (wmean_exclude_precise and e["is_imprecise"] is True))
+
+        if ti_chem_excl:
+            _ti_outlier_stage(_per_analysis_fail)
+
         if p4_cfg.get("reject_outliers", False):
             _ol_method = p4_cfg.get("outlier_method", "mswd")
             try:
@@ -65486,6 +67897,8 @@ class MainWindow(QMainWindow):
                     continue
                 if _entry.get("set_name", "") in _age_skip_sets:
                     continue                 # Tarea 4: set sin cómputo de edad
+                if ti_chem_excl and _entry.get("ti_is_outlier"):
+                    continue                 # M5: la química va primero
                 _a, _s = self._select_age_for_wmean(
                     _entry["ages"], _entry["best_age_label"], wmean_source,
                     _entry["conc_age"], _entry["conc_2se"]
@@ -65585,6 +67998,18 @@ class MainWindow(QMainWindow):
                     _man = entry.get("excluded_manual")
                     entry["exclusion_reason"] = " + ".join(
                         ([f"manual: {_man}"] if _man else []) + reasons)
+
+        # M5: los outliers químicos de Ti (detectados arriba, antes de Stage A)
+        # salen de las medias con su motivo propio — se suma a cualquier
+        # criterio, como la exclusión a mano.
+        if ti_chem_excl:
+            for entry in self.calc_results:
+                if entry.get("ti_is_outlier"):
+                    entry["excluded_from_mean"] = True
+                    _prev = entry.get("exclusion_reason")
+                    entry["exclusion_reason"] = (
+                        (f"{_prev} + " if _prev else "")
+                        + "Ti outlier (chemistry)")
 
         # ── Halpin method: cúmulo coherente más viejo (§7.12, v1) ────────────
         # Capa de exclusión EXTRA sobre los granos que ya pasaron los filtros
@@ -65898,21 +68323,11 @@ class MainWindow(QMainWindow):
         # n-σ poblacional. Marca ti_is_outlier (default False → no-op si off).
         # Debe correr ANTES de _paint_table2_from_model (marca la celda T) y de
         # los σ_pop/Summary (que descartan los outliers).
-        if ti_active and ti_reject_outliers:
-            _ti_buckets = {}
-            for _ei, _entry in enumerate(self.calc_results):
-                if _entry["ti_t_c"] is None:
-                    continue
-                if ti_exclude_upb_excluded and _entry["excluded_from_mean"]:
-                    continue
-                _ti_buckets.setdefault(
-                    self._canonical_bucket_key(_entry), []
-                ).append(_ei)
-            for _members in _ti_buckets.values():
-                _temps = [self.calc_results[_ei]["ti_t_c"] for _ei in _members]
-                _rej = self._reject_ti_outliers(_temps, ti_outlier_k)
-                for _li in _rej:
-                    self.calc_results[_members[_li]]["ti_is_outlier"] = True
+        # (M5: con la exclusión química ya se detectaron ANTES de las edades;
+        # recalcularlos aquí, con ellos mismos ya excluidos, cambiaría el
+        # conjunto.)
+        if ti_active and ti_reject_outliers and not ti_chem_excl:
+            _ti_outlier_stage(lambda e: e["excluded_from_mean"])
 
         # ── §14 Hf-1: derivar los floats Hf del modelo renderizado ────────────
         # Una sola pasada, AQUÍ (tras blanqueo/recompute de E-Hf, antes de
@@ -66004,6 +68419,7 @@ class MainWindow(QMainWindow):
         # §(1): re-aplicar el "fijar Analysis ID" de Tabla 2 tras pintar.
         self._apply_pinned_id_header(
             self.calc_table, getattr(self, "_pin_id_t2", False))
+        self._apply_manual_col_widths(self.calc_table, "t2")     # M20
 
         # HfIn-2b: con U-Pb OFF, las columnas U-Pb base de Tabla 2 (3 edades +
         # ±2σ, Best Age, Disc%, Rho = índices 2-10) van vacías → se ocultan,
@@ -66202,6 +68618,8 @@ class MainWindow(QMainWindow):
         # aplicados arriba) → validar rango físico + tablero de banderas. Pone
         # el badge ámbar en la píldora si hay avisos (no roba foco).
         self._refresh_qa_summary_widget()
+        self._refresh_ti_summary_visibility()         # M17: píldora Textures
+        self._refresh_tex_summary()
         # 2026-09-30: las pestañas de U-Pb de Panel 5 (Concordia, Weighted
         # mean) se ven si hay U-Pb en los DATOS — ya no hay interruptor.
         self._apply_panel5_upb_visibility()
@@ -67710,6 +70128,31 @@ class MainWindow(QMainWindow):
         # checkboxes se repueblan en _rebuild_texture_checkbox_lists(); la
         # maquinaria de config (_read/_apply_panel2_config) los itera y no
         # necesita saber cuáles son built-in y cuáles custom.
+        # M18 (2026-10-25): la forma del grano, primera de las tres listas
+        # (la columna "Grain shape" va antes de Position en Tabla 1).
+        shape_label = QLabel("Grain shape:")
+        shape_label.setStyleSheet("color: #4a6a8a; font-size: 12px; background: transparent;")
+        tex_layout.addWidget(shape_label)
+
+        self.shape_checkboxes = {}
+        self._tex_shape_holder = QWidget()
+        self._tex_shape_holder.setStyleSheet("background: transparent;")
+        _sl = QVBoxLayout(self._tex_shape_holder)
+        _sl.setContentsMargins(0, 0, 0, 0); _sl.setSpacing(3)
+        tex_layout.addWidget(self._tex_shape_holder)
+
+        add_shape_btn = QPushButton("+ Add…")
+        add_shape_btn.setToolTip(
+            "Register your own grain shape (name, description and the symbol "
+            "used in texture-symbology plots). Saved with the project.")
+        add_shape_btn.setStyleSheet("QPushButton { font-size: 11px; padding: 2px 10px; }")
+        add_shape_btn.clicked.connect(
+            lambda: self._open_texture_editor("shapes"))
+        _sb_row = QHBoxLayout(); _sb_row.setContentsMargins(0, 0, 0, 0)
+        _sb_row.addWidget(add_shape_btn); _sb_row.addStretch()
+        tex_layout.addLayout(_sb_row)
+        tex_layout.addSpacing(4)
+
         pos_label = QLabel("Position:")
         pos_label.setStyleSheet("color: #4a6a8a; font-size: 12px; background: transparent;")
         tex_layout.addWidget(pos_label)
@@ -67773,6 +70216,10 @@ class MainWindow(QMainWindow):
         if proj is None:
             return _default_texture_catalog()[kind]
         cat = proj.setdefault("texture_catalog", _default_texture_catalog())
+        if kind == "shapes" and not isinstance(cat.get(kind), list):
+            # M18: un proyecto en memoria de antes de la forma de grano.
+            import copy
+            cat[kind] = copy.deepcopy(DEFAULT_TEXTURE_CATALOG["shapes"])
         return cat.setdefault(kind, [])
 
     def _adopt_imported_textures(self):
@@ -67786,11 +70233,10 @@ class MainWindow(QMainWindow):
         dyn = getattr(self.data_table, "dynamic_cols", None) or []
         n_fixed = len(UPB_COLUMNS)
         cols = {}
+        _by_header = {v: k for k, v in _TEXTURE_COL_HEADERS.items()}
         for i, (h, _w, _x) in enumerate(dyn):
-            if h == "Position":
-                cols["positions"] = n_fixed + i
-            elif h == "Texture\nType":
-                cols["types"] = n_fixed + i
+            if h in _by_header:
+                cols[_by_header[h]] = n_fixed + i
         if not proj or not cols:
             return 0
         found = {k: set() for k in cols}
@@ -67815,8 +70261,7 @@ class MainWindow(QMainWindow):
         if changed:
             self._rebuild_texture_checkbox_lists()
         for kind, vals in found.items():
-            boxes = (self.position_checkboxes if kind == "positions"
-                     else self.texture_type_checkboxes)
+            boxes = self._texture_boxes(kind)
             for v in vals:
                 cb = boxes.get(v)
                 if cb is not None and not cb.isChecked():
@@ -67833,8 +70278,8 @@ class MainWindow(QMainWindow):
         LEGACY (constantes BIV_* — cubre celdas viejas con texturas que ya no
         están en el catálogo, p.ej. "Second rim" o "Concentric banding") + el
         CATÁLOGO del proyecto encima (que manda siempre)."""
-        base = (BIV_POSITION_MARKERS if kind == "positions"
-                else BIV_TEXTURE_MARKERS)
+        base = {"positions": BIV_POSITION_MARKERS,
+                "types": BIV_TEXTURE_MARKERS}.get(kind, {})
         merged = dict(base)
         for c in self._texture_entries(kind):
             if c.get("name") and c.get("marker"):
@@ -67851,12 +70296,18 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "_tex_pos_holder"):
             return          # Panel 2 aún no construido (orden de arranque)
         specs = [
+            ("shapes", self._tex_shape_holder, self.shape_checkboxes),
             ("positions", self._tex_pos_holder, self.position_checkboxes),
             ("types", self._tex_type_holder, self.texture_type_checkboxes),
         ]
         for kind, holder, cb_dict in specs:
             checked_before = {n for n, cb in cb_dict.items() if cb.isChecked()}
             lay = holder.layout()
+            # 2026-10-26: un filtro de arrastre por lista (reordenar).
+            drag = getattr(holder, "_tex_drag", None)
+            if drag is None:
+                drag = _TexRowDrag(self, kind, holder)
+                holder._tex_drag = drag
             while lay.count():
                 it = lay.takeAt(0)
                 w = it.widget()
@@ -67891,9 +70342,435 @@ class MainWindow(QMainWindow):
                 menu_btn.clicked.connect(
                     lambda _=False, k=kind, n=name:
                         self._open_texture_row_menu(k, n))
-                rl.addWidget(cb); rl.addStretch(); rl.addWidget(menu_btn)
+                # M16: su ficha del catálogo ilustrado.
+                info_btn = QPushButton("ⓘ")
+                info_btn.setFixedWidth(22)
+                info_btn.setStyleSheet(menu_btn.styleSheet())
+                info_btn.setToolTip("Illustrated card: drawing, geological "
+                                    "interpretation and references")
+                info_btn.clicked.connect(
+                    lambda _=False, k=kind, n=name:
+                        self._open_texture_atlas(k, n))
+                rl.addWidget(cb); rl.addStretch(); rl.addWidget(info_btn)
+                rl.addWidget(menu_btn)
                 cb_dict[name] = cb
+                row_w.setProperty("texName", name)
+                row_w.installEventFilter(drag)
+                cb.installEventFilter(drag)
+                cb.setToolTip(cb.toolTip() + "\nDrag to reorder.")
                 lay.addWidget(row_w)
+            # 2026-10-26 (Guillermo): valores de Tabla 1 que NO están en
+            # esta lista (sobras de renombres de antes de §161, o tecleados
+            # a mano): se avisan aquí, con "Merge into…" y "Add".
+            orphans = self._texture_orphans(kind)
+            if orphans:
+                warn = QLabel("⚠ In Table 1 but not in this list:")
+                warn.setStyleSheet("color:#b5651d; font-size:11px; "
+                                   "background:transparent;")
+                warn.setToolTip(
+                    "Values typed in Table 1 (or left behind by an old "
+                    "rename) that are not in the catalog: they show up as "
+                    "combinations of their own. Merge each into the right "
+                    "texture, or add it to the list.")
+                lay.addWidget(warn)
+                names = [e.get("name") for e in self._texture_entries(kind)
+                         if e.get("name")]
+                for val, n in sorted(orphans.items()):
+                    ow = QWidget()
+                    ow.setStyleSheet("background: transparent;")
+                    ol = QHBoxLayout(ow)
+                    ol.setContentsMargins(_DLG_STEP, 0, 0, 0)
+                    ol.setSpacing(4)
+                    ol_lbl = QLabel(f"{val}  ({n})")
+                    ol_lbl.setStyleSheet("font-size:12px; "
+                                         "background:transparent;")
+                    ol.addWidget(ol_lbl)
+                    ol.addStretch()
+                    mb = QPushButton("Merge into…")
+                    mb.setObjectName("smallBtn")
+                    mm = QMenu(mb)
+                    for nm in names:
+                        mm.addAction(nm).triggered.connect(
+                            lambda _c=False, k=kind, v=val, t=nm:
+                                self._merge_texture_orphan(k, v, t))
+                    mb.setMenu(mm)
+                    mb.setEnabled(bool(names))
+                    ab = QPushButton("Add")
+                    ab.setObjectName("smallBtn")
+                    ab.setToolTip("Add it to this list as it is.")
+                    ab.clicked.connect(
+                        lambda _c=False, k=kind, v=val:
+                            self._add_texture_orphan(k, v))
+                    ol.addWidget(mb)
+                    ol.addWidget(ab)
+                    lay.addWidget(ow)
+
+    # ── M16 (2026-10-25): el catálogo ILUSTRADO de texturas ──────────────
+    _ATLAS_KIND_TITLES = {"shapes": "Grain shape", "positions": "Position",
+                          "types": "Texture type"}
+
+    def _atlas_entries(self, kind):
+        """Las entradas de `kind` del catálogo del proyecto (o las de fábrica
+        sin proyecto)."""
+        if self.current_project in self.projects:
+            return self._texture_entries(kind)
+        return _default_texture_catalog()[kind]
+
+    @staticmethod
+    def _atlas_user_image(entry):
+        """La imagen propia de una entrada (QImage) o None."""
+        data = (entry or {}).get("image")
+        if not data:
+            return None
+        import base64
+        try:
+            img = QImage.fromData(base64.b64decode(data))
+        except (ValueError, TypeError):
+            return None
+        return None if img.isNull() else img
+
+    @staticmethod
+    def _atlas_card_of(kind, entry):
+        """La ficha que ilustra una entrada: la que eligió en Edit… ("card";
+        "" = ninguna) o, si no eligió, la de su propio nombre. 2026-10-26:
+        así una textura con nombre propio puede usar el dibujo y la ficha de
+        una de fábrica."""
+        e = entry or {}
+        name = e.get("card") if "card" in e else e.get("name")
+        return _TEXTURE_ATLAS.get((kind, name)) if name else None
+
+    def _atlas_image_for(self, kind, entry):
+        """(QImage, origen) — la imagen del usuario, el dibujo de fábrica o
+        el hueco vacío."""
+        img = self._atlas_user_image(entry)
+        if img is not None:
+            return img, "user"
+        card = self._atlas_card_of(kind, entry)
+        if card:
+            return _atlas_qimage(card["draw"], card["shape"]), "atlas"
+        return _atlas_placeholder(), "none"
+
+    def _open_texture_atlas(self, kind=None, name=None):
+        """M16 — la ventana "Zircon textures" (Help ▸ Zircon textures, y el ⓘ
+        de cada fila de Textures, que la abre en SU ficha). A la izquierda,
+        las formas de grano, posiciones y texturas del proyecto; a la
+        derecha, la ficha: dibujo (estilo CL, propio), descripción,
+        interpretación geológica y referencias. Una entrada del usuario no
+        tiene ficha: muestra su descripción y admite su propia imagen
+        (también las de fábrica), que se guarda reducida DENTRO del
+        proyecto."""
+        dlg = getattr(self, "_atlas_dlg", None)
+        try:
+            if dlg is not None and dlg.isVisible():
+                dlg._atlas_fill(kind, name)
+                dlg.raise_()
+                dlg.activateWindow()
+                return dlg
+        except RuntimeError:                       # ya destruida
+            pass
+        # Hija del diálogo modal abierto (si lo hay), o éste la bloquearía.
+        parent = QApplication.activeModalWidget() or self
+        dlg = QDialog(parent)
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        dlg.setWindowTitle("Zircon textures — ZirClock")
+        dlg.setStyleSheet(STYLE)
+        dlg.resize(860, 560)
+        root = QHBoxLayout(dlg)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(12)
+        lst = QListWidget(dlg)
+        lst.setIconSize(QSize(27, 36))
+        lst.setFixedWidth(260)
+        lst.setStyleSheet("QListWidget { font-size: 12px; }")
+        root.addWidget(lst)
+        img_col = QVBoxLayout()
+        img_col.setSpacing(6)
+        img_lbl = QLabel(dlg)
+        img_lbl.setFixedSize(240, 320)
+        img_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        img_lbl.setStyleSheet("background: #0b0b0e; border-radius: 6px;")
+        img_col.addWidget(img_lbl)
+        img_cap = QLabel(dlg)
+        img_cap.setWordWrap(True)
+        img_cap.setFixedWidth(240)
+        img_cap.setStyleSheet(_HINT_QSS)
+        img_col.addWidget(img_cap)
+        b_add = QPushButton("Use my image…", dlg)
+        b_add.setObjectName("smallBtn")
+        b_del = QPushButton("Remove my image", dlg)
+        b_del.setObjectName("smallBtn")
+        img_col.addWidget(b_add)
+        img_col.addWidget(b_del)
+        img_col.addStretch()
+        root.addLayout(img_col)
+        from PyQt6.QtWidgets import QTextBrowser
+        txt = QTextBrowser(dlg)
+        txt.setOpenExternalLinks(False)
+        txt.setStyleSheet(
+            f"QTextBrowser {{ background: {THEME['surface']}; "
+            f"color: {THEME['text']}; border: none; font-size: 13px; }}")
+        root.addWidget(txt, 1)
+        st = {"kind": None, "name": None}
+
+        def _entry(kind_, name_):
+            return next((e for e in self._atlas_entries(kind_)
+                         if e.get("name") == name_), None)
+
+        def _icon(kind_, e):
+            im, _src = self._atlas_image_for(kind_, e)
+            return QIcon(QPixmap.fromImage(im.scaled(
+                54, 72, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation)))
+
+        def _show(kind_, name_):
+            import html as _h
+            e = _entry(kind_, name_)
+            st.update(kind=kind_, name=name_)
+            if e is None:
+                txt.setHtml("")
+                img_lbl.clear()
+                return
+            im, src = self._atlas_image_for(kind_, e)
+            img_lbl.setPixmap(QPixmap.fromImage(im.scaled(
+                240, 320, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation)))
+            img_cap.setText({"user": "Your image (saved in the project).",
+                             "atlas": "Schematic drawing in the style of a "
+                                      "CL image (not a real grain).",
+                             "none": ""}[src])
+            has_proj = self.current_project in self.projects
+            b_add.setEnabled(has_proj)
+            b_add.setToolTip("" if has_proj else
+                             "Open a project to add your own images.")
+            b_del.setVisible(src == "user")
+            card = self._atlas_card_of(kind_, e)
+            _own = _TEXTURE_ATLAS.get((kind_, name_)) is card
+            sub = self._ATLAS_KIND_TITLES[kind_] + (
+                (" · ZirClock catalog" if _own else
+                 f" · card of “{e.get('card')}”") if card
+                else " · added in this project")
+            mk = dict(TEXTURE_MARKER_CHOICES).get(e.get("marker"),
+                                                   e.get("marker") or "")
+            parts = [f"<h2 style='margin-bottom:2px'>{_h.escape(name_)}</h2>",
+                     f"<p style='color:{THEME['text2']}; margin-top:0'>"
+                     f"{_h.escape(sub)}"
+                     + (f" · symbol: {_h.escape(mk)}" if mk else "") + "</p>"]
+            if e.get("desc"):
+                parts.append("<p><b>Description</b><br>"
+                             f"{_h.escape(e['desc'])}</p>")
+            if card:
+                parts.append("<p><b>Geological interpretation</b><br>"
+                             f"{_h.escape(card['interp'])}</p>")
+                if kind_ == "types":
+                    parts.append(f"<p style='color:{THEME['text2']}; "
+                                 f"font-size:11px'>{_h.escape(_ATLAS_CL_NOTE)}"
+                                 "</p>")
+                parts.append("<p><b>References</b></p><ul style='margin-top:0'>"
+                             + "".join(f"<li>{_h.escape(_ATLAS_REFS[r])}</li>"
+                                       for r in card["refs"]) + "</ul>")
+            else:
+                parts.append(f"<p style='color:{THEME['text2']}'><i>Added in "
+                             "this project, so ZirClock has no card for it. "
+                             "Use “Use my image…” to illustrate it, for "
+                             "example with a CL photo — or, if it is one of "
+                             "ZirClock's textures under another name, pick "
+                             "its card in Textures ▸ ⋮ ▸ Edit….</i></p>")
+            txt.setHtml("".join(parts))
+
+        def _fill(kind_=None, name_=None):
+            lst.blockSignals(True)
+            lst.clear()
+            first = None
+            want = None
+            for k in ("shapes", "positions", "types"):
+                h = QListWidgetItem(self._ATLAS_KIND_TITLES[k].upper())
+                h.setFlags(Qt.ItemFlag.NoItemFlags)
+                f = h.font()
+                f.setPointSize(10)
+                f.setBold(True)
+                h.setFont(f)
+                lst.addItem(h)
+                for e in self._atlas_entries(k):
+                    nm = e.get("name") or ""
+                    if not nm:
+                        continue
+                    it = QListWidgetItem(_icon(k, e), nm)
+                    it.setData(Qt.ItemDataRole.UserRole, (k, nm))
+                    lst.addItem(it)
+                    if first is None:
+                        first = it
+                    if k == kind_ and nm == name_:
+                        want = it
+            lst.blockSignals(False)
+            pick = want or first
+            if pick is not None:
+                lst.setCurrentItem(pick)
+                _show(*pick.data(Qt.ItemDataRole.UserRole))
+
+        def _on_cur(cur, _prev):
+            if cur is not None and cur.data(Qt.ItemDataRole.UserRole):
+                _show(*cur.data(Qt.ItemDataRole.UserRole))
+        lst.currentItemChanged.connect(_on_cur)
+
+        def _refresh_current():
+            it = lst.currentItem()
+            k, n = st["kind"], st["name"]
+            e = _entry(k, n)
+            if it is not None and e is not None:
+                it.setIcon(_icon(k, e))
+            _show(k, n)
+
+        def _add_image():
+            e = _entry(st["kind"], st["name"])
+            if e is None:
+                return
+            path, _ = QFileDialog.getOpenFileName(
+                dlg, "Choose an image", "",
+                "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp)")
+            if not path:
+                return
+            data = self._atlas_encode_image(path)
+            if data is None:
+                QMessageBox.warning(dlg, "Image",
+                                    "ZirClock could not read that image.")
+                return
+            e["image"] = data
+            self._mark_dirty()
+            _refresh_current()
+
+        def _del_image():
+            e = _entry(st["kind"], st["name"])
+            if e is not None and e.pop("image", None) is not None:
+                self._mark_dirty()
+                _refresh_current()
+        b_add.clicked.connect(lambda *_a: _add_image())
+        b_del.clicked.connect(lambda *_a: _del_image())
+        dlg._atlas_fill = _fill
+        dlg._atlas_show = _show
+        dlg._atlas_list = lst
+        dlg._atlas_text = txt
+        _fill(kind, name)
+        self._atlas_dlg = dlg
+        dlg.show()
+        dlg.raise_()
+        return dlg
+
+    @staticmethod
+    def _atlas_encode_image(path, max_side=640):
+        """Lee una imagen, la REDUCE (lado mayor ≤ `max_side` px) y la
+        devuelve en base64 (JPEG; PNG si trae transparencia) para guardarla
+        dentro del proyecto. None si no se pudo leer."""
+        import base64
+        from PyQt6.QtCore import QBuffer, QByteArray, QIODevice
+        img = QImage(path)
+        if img.isNull():
+            return None
+        if max(img.width(), img.height()) > max_side:
+            img = img.scaled(max_side, max_side,
+                             Qt.AspectRatioMode.KeepAspectRatio,
+                             Qt.TransformationMode.SmoothTransformation)
+        ba = QByteArray()
+        buf = QBuffer(ba)
+        buf.open(QIODevice.OpenModeFlag.WriteOnly)
+        fmt = "PNG" if img.hasAlphaChannel() else "JPG"
+        img.save(buf, fmt, 90 if fmt == "JPG" else -1)
+        buf.close()
+        return base64.b64encode(bytes(ba)).decode("ascii")
+
+    def _texture_orphans(self, kind):
+        """{valor: n} — lo que Tabla 1 tiene en la columna de `kind` (también
+        en las ocultas) y que el catálogo no conoce. Lee el MODELO."""
+        proj = self.projects.get(self.current_project) or {}
+        names = {e.get("name") for e in self._texture_entries(kind)}
+        col = self._texture_live_col(kind)
+        header = self._texture_col_header(kind)
+        out = {}
+        for smp in proj.get("samples", []):
+            for r in smp.get("rows", []):
+                v = (r.get("cells") or {}).get(col) if col is not None else None
+                if not v:
+                    v = (r.get("hidden_dynamic") or {}).get(header)
+                v = str(v).strip() if v else ""
+                if v and v not in names:
+                    out[v] = out.get(v, 0) + 1
+        return out
+
+    def _merge_texture_orphan(self, kind, value, target):
+        """Une un valor huérfano a una textura del catálogo: sus celdas pasan
+        al nombre de la textura (y también reglas y símbolos que lo nombren)."""
+        n = self._rewrite_texture_cells(kind, value, target)
+        _rename_texture_in_rules_and_combos(
+            self.projects[self.current_project], kind, value, target)
+        self.rebuild_table(skip_capture=True)
+        self.calc_results_stale = True
+        self._rebuild_texture_checkbox_lists()
+        self._mark_dirty()
+        self.statusBar().showMessage(
+            f"'{value}' merged into '{target}': {n} cell(s).", 6000)
+
+    def _add_texture_orphan(self, kind, value):
+        """Agrega un valor huérfano al catálogo tal cual (marcado, y ya en el
+        menú de su columna)."""
+        entries = self._texture_entries(kind)
+        used = {e.get("marker") for e in entries}
+        codes = [c for c, _l in TEXTURE_MARKER_CHOICES]
+        entries.append({"name": value, "desc": "",
+                        "marker": next((c for c in codes if c not in used),
+                                       codes[0])})
+        proj = self.projects[self.current_project]
+        header = self._texture_col_header(kind)
+        for cols in (proj.get("dynamic_cols"),
+                     getattr(self.data_table, "dynamic_cols", None)):
+            for i, (h, w, wi) in enumerate(cols or []):
+                if h == header and wi and wi[0] == "dropdown" \
+                        and value not in (wi[1] or []):
+                    cols[i] = (h, w, (wi[0], list(wi[1] or []) + [value]))
+        self._rebuild_texture_checkbox_lists()
+        cb = self._texture_boxes(kind).get(value)
+        if cb is not None:
+            cb.setChecked(True)
+        self._mark_dirty()
+        self.statusBar().showMessage(f"'{value}' added to the list.", 5000)
+
+    def _reorder_texture(self, kind, name, index):
+        """Mueve `name` a la posición `index` de su lista (el índice es el de
+        la línea de inserción: antes de la fila `index`). El orden del
+        catálogo manda en los menús de Tabla 1, en las leyendas y en las
+        combinaciones."""
+        if not self.current_project:
+            return
+        entries = self._texture_entries(kind)
+        e = next((x for x in entries if x.get("name") == name), None)
+        if e is None:
+            return
+        i0 = entries.index(e)
+        index = max(0, min(int(index), len(entries)))
+        if index > i0:
+            index -= 1
+        if index == i0:
+            return
+        entries.insert(index, entries.pop(i0))
+        order = [x.get("name") for x in entries]
+        header = self._texture_col_header(kind)
+        proj = self.projects[self.current_project]
+        for cols in (proj.get("dynamic_cols"),
+                     getattr(self.data_table, "dynamic_cols", None)):
+            for i, (h, w, wi) in enumerate(cols or []):
+                if h == header and wi and wi[0] == "dropdown":
+                    opts = sorted(wi[1] or [],
+                                  key=lambda o: (order.index(o) if o in order
+                                                 else len(order)))
+                    cols[i] = (h, w, (wi[0], opts))
+        self._rebuild_texture_checkbox_lists()
+        self._mark_dirty()
+        # Corre desde un temporizador: una excepción aquí cerraría la app
+        # (§3); se informa en la barra de estado y en la consola.
+        try:
+            self._replot_visible_preserving_view()
+        except Exception as ex:              # noqa: BLE001
+            print(f"reorder textures: replot failed: {ex!r}", file=sys.stderr)
+            self.statusBar().showMessage(
+                "Order changed; press Plot it! to redraw.", 6000)
 
     def _open_texture_row_menu(self, kind, name):
         """Menú ⋮ de una fila custom: Edit… / Delete…"""
@@ -67907,7 +70784,222 @@ class MainWindow(QMainWindow):
             self._delete_custom_texture(kind, name)
 
     def _texture_col_header(self, kind):
-        return "Position" if kind == "positions" else "Texture\nType"
+        return _TEXTURE_COL_HEADERS[kind]
+
+    def _texture_boxes(self, kind):
+        """Las casillas de la ventana Textures de `kind` (M18: tres listas —
+        forma de grano, posición y tipo)."""
+        return {"shapes": getattr(self, "shape_checkboxes", {}),
+                "positions": self.position_checkboxes,
+                "types": self.texture_type_checkboxes}[kind]
+
+    def _texture_live_col(self, kind):
+        """Columna de Tabla 1 (índice absoluto) de la textura `kind`, según la
+        tabla VIVA. (2026-10-25, M18: la copia guardada del proyecto no trae
+        una columna activada en esta sesión, y con "Grain shape" las
+        posiciones de las demás también se corrían — renombrar o borrar una
+        textura no llegaba a sus celdas.)"""
+        header = self._texture_col_header(kind)
+        proj = self.projects.get(self.current_project) or {}
+        for i, (h, _w, _wi) in enumerate(
+                getattr(getattr(self, "data_table", None), "dynamic_cols",
+                        None) or proj.get("dynamic_cols") or []):
+            if h == header:
+                return len(UPB_COLUMNS) + i
+        return None
+
+    # ── M17 (2026-10-25): combinaciones forma ▸ posición ▸ textura ─────────
+    def _combo_cols(self):
+        return {k: self._texture_live_col(k) for k in _COMBO_LEVELS}
+
+    @staticmethod
+    def _texture_values_of(entry, cols):
+        """(forma, posición, textura) del análisis, de su fila de Tabla 1;
+        "—" donde no tiene valor."""
+        cells = (entry.get("vrow") or {}).get("raw_cells") or {}
+        out = []
+        for kind in _COMBO_LEVELS:
+            c = cols.get(kind)
+            v = cells.get(c, "") if c is not None else ""
+            v = "" if v is None else str(v).strip()
+            out.append(v or _COMBO_EMPTY)
+        return tuple(out)
+
+    @staticmethod
+    def _combo_of(values, levels):
+        return _combo_label([values[i] for i, lvl in enumerate(_COMBO_LEVELS)
+                             if lvl in levels])
+
+    def _combo_marker_setup(self, ccfg, marker_by):
+        """Para "Marker by ▸ Combination": {levels, markers, cols} o None si
+        el diagrama no lo usa. `markers` = {combinación: símbolo} de las que
+        el usuario marcó; las demás van con el marcador chico neutro."""
+        if marker_by != "combo":
+            return None
+        ccfg = ccfg or {}
+        levels = [l for l in _COMBO_LEVELS
+                  if l in (ccfg.get("levels") or [])] \
+            or self._combo_default_levels()
+        mk = dict(ccfg.get("markers") or {})
+        order = self._combo_order(list(mk), levels)      # 2026-10-26
+        cols_ = dict(ccfg.get("colors") or {})
+        for i, lab in enumerate(order):         # sin color: el de la paleta
+            cols_.setdefault(lab, self._COMBO_PALETTE[
+                i % len(self._COMBO_PALETTE)])
+        return {"levels": levels,
+                "markers": {lab: mk[lab] for lab in order},
+                "cols": self._combo_cols(),
+                "colors": cols_,
+                "sizes": dict(ccfg.get("sizes") or {}),
+                "alphas": dict(ccfg.get("alphas") or {}),
+                "use_colors": bool(ccfg.get("use_colors")),
+                "order": order}
+
+    def _combo_default_levels(self):
+        """Los niveles cuya columna trae algún dato (al menos uno)."""
+        cols = self._combo_cols()
+        seen = set()
+        for e in (getattr(self, "calc_results", None) or []):
+            vals = self._texture_values_of(e, cols)
+            for i, lvl in enumerate(_COMBO_LEVELS):
+                if vals[i] != _COMBO_EMPTY:
+                    seen.add(lvl)
+        out = [l for l in _COMBO_LEVELS if l in seen]
+        return out or ["positions", "types"]
+
+    def _combo_counts(self, levels, samples=None):
+        """{combinación: {muestra: n}} de los análisis (spots) válidos de las
+        muestras activas (o de `samples`)."""
+        cols = self._combo_cols()
+        out = {}
+        for e in (getattr(self, "calc_results", None) or []):
+            if e.get("invalid_reason"):
+                continue
+            sn = e.get("sample_name")
+            if samples is not None and sn not in samples:
+                continue
+            lab = self._combo_of(self._texture_values_of(e, cols), levels)
+            d = out.setdefault(lab, {})
+            d[sn] = d.get(sn, 0) + 1
+        return out
+
+    def _rule_pattern_label(self, p):
+        """M19: "Any ▸ Core ▸ Homogeneous dark" — los niveles con columna en
+        Tabla 1, más cualquiera que la combinación fije."""
+        cols = self._combo_cols()
+        lv = [l for l in _COMBO_LEVELS
+              if cols.get(l) is not None or (p or {}).get(l)]
+        return _combo_label([(p or {}).get(l) or _COMBO_ANY for l in lv])
+
+    def _combo_summary_table(self, levels):
+        """M17: la tabla de conteos — (muestras, renglones, totales por
+        muestra, total). Renglón = (combinación, [n por muestra], total), de
+        más a menos análisis. Cuenta ANÁLISIS (spots) válidos, no granos."""
+        res = getattr(self, "calc_results", None) or []
+        if not res or not levels:
+            return None
+        samples = []
+        for e in res:
+            sn = e.get("sample_name")
+            if not e.get("invalid_reason") and sn not in samples:
+                samples.append(sn)
+        counts = self._combo_counts(levels)
+        rows = []
+        for lab, d in counts.items():
+            ns = [d.get(sn, 0) for sn in samples]
+            rows.append((lab, ns, sum(ns)))
+        # 2026-10-26: en el orden del catálogo de Textures (el que Guillermo
+        # arregla arrastrando); "—" y lo que no está en el catálogo, al final.
+        _ord = {lab: i for i, lab in enumerate(
+            self._combo_order([r[0] for r in rows], levels))}
+        rows.sort(key=lambda r: _ord[r[0]])
+        col_tot = [sum(r[1][j] for r in rows) for j in range(len(samples))]
+        return samples, rows, col_tot, sum(col_tot)
+
+    def _tex_summary_levels(self):
+        cols = self._combo_cols()
+        lv = [l for l in _COMBO_LEVELS if l in (self._tex_sum_levels or [])
+              and cols.get(l) is not None]
+        if self._tex_sum_levels is None or not lv and self._tex_sum_levels:
+            lv = [l for l in self._combo_default_levels()
+                  if cols.get(l) is not None]
+        return lv
+
+    def _on_tex_summary_levels(self):
+        checks = getattr(self, "_tex_sum_checks", None) or {}
+        self._tex_sum_levels = [l for l in _COMBO_LEVELS
+                                if checks.get(l) and checks[l].isChecked()]
+        self._refresh_tex_summary()
+
+    def _refresh_tex_summary(self):
+        """M17: llena la pestaña Textures de la ventana de resultados."""
+        w = getattr(self, "tex_summary_widget", None)
+        if w is None:
+            return
+        import html as _html
+        cols = self._combo_cols()
+        levels = self._tex_summary_levels()
+        if self._tex_sum_levels is not None and not self._tex_sum_levels:
+            levels = []
+        for lvl, cb in self._tex_sum_checks.items():
+            cb.blockSignals(True)
+            cb.setChecked(lvl in levels)
+            cb.setEnabled(cols.get(lvl) is not None)
+            cb.blockSignals(False)
+        if not levels:
+            w.setPlainText("  Tick at least one level to combine.")
+            return
+        tab = self._combo_summary_table(levels)
+        if tab is None:
+            w.setPlainText("  (no results yet)")
+            return
+        samples, rows, col_tot, grand = tab
+        lab_w = max([len("Combination")] + [len(r[0]) for r in rows])
+        cw = [max(5, len(str(sn))) for sn in samples]
+        tot_w = max(5, len(str(grand)))
+
+        def esc(t):
+            return _html.escape(str(t))
+
+        def num(n, width):
+            if not n:
+                return f'<span style="color:#505060;">{"·":>{width}}</span>'
+            return f'<span style="color:#d0d0d0;">{n:>{width}}</span>'
+
+        title = _COMBO_SEP.join(_COMBO_LEVEL_LABELS[l] for l in levels)
+        lines = [f'<span style="color:#808080;">  Analyses (spots) by </span>'
+                 f'<span style="color:#5fafd7;">{esc(title)}</span>'
+                 f'<span style="color:#808080;">  ·  {len(samples)} '
+                 f'sample{"s" if len(samples) != 1 else ""}</span>', ""]
+        head = ("  " + f"{'Combination':<{lab_w}}" + "".join(
+            f"  {str(sn):>{cw[j]}}" for j, sn in enumerate(samples))
+            + f"  {'Total':>{tot_w}}")
+        lines.append(f'<span style="color:#5fafd7;">{esc(head)}</span>')
+        for lab, ns, tot in rows:
+            col = "#808080" if all(
+                p.strip() == _COMBO_EMPTY for p in lab.split(_COMBO_SEP.strip())
+            ) else "#d0d0d0"
+            lines.append(
+                f'  <span style="color:{col};">{esc(f"{lab:<{lab_w}}")}</span>'
+                + "".join("  " + num(n, cw[j]) for j, n in enumerate(ns))
+                + f'  <span style="color:#d7d75f;">{tot:>{tot_w}}</span>')
+        lines.append('<span style="color:#404050;">  ' + "─" * (
+            lab_w + sum(c + 2 for c in cw) + tot_w + 2) + '</span>')
+        lines.append(
+            f'  <span style="color:#808080;">{"Total":<{lab_w}}</span>'
+            + "".join("  " + num(n, cw[j]) for j, n in enumerate(col_tot))
+            + f'  <span style="color:#d7d75f;">{grand:>{tot_w}}</span>')
+        lines.append("")
+        lines.append(f'<span style="color:#606060;">  {_COMBO_EMPTY} = no '
+                     'value in that column · invalid rows are not '
+                     'counted</span>')
+        w.clear()
+        w.appendHtml(f'<pre style="margin:0; font-family:{_MONO_CSS};">'
+                     + "<br>".join(lines) + '</pre>')
+        from PyQt6.QtGui import QTextCursor
+        cur = w.textCursor()
+        cur.movePosition(QTextCursor.MoveOperation.Start)
+        w.setTextCursor(cur)
 
     def _count_texture_assignments(self, kind, name):
         """Cuántas filas de TODO el proyecto tienen `name` asignado en la
@@ -67918,11 +71010,7 @@ class MainWindow(QMainWindow):
         self._capture_table_into_samples()
         proj = self.projects[self.current_project]
         header = self._texture_col_header(kind)
-        col = None
-        for i, (h, _w, _wi) in enumerate(proj.get("dynamic_cols") or []):
-            if h == header:
-                col = len(UPB_COLUMNS) + i
-                break
+        col = self._texture_live_col(kind)
         n = 0
         for s in proj.get("samples", []):
             for r in s.get("rows", []):
@@ -67942,11 +71030,7 @@ class MainWindow(QMainWindow):
         self._capture_table_into_samples()
         proj = self.projects[self.current_project]
         header = self._texture_col_header(kind)
-        col = None
-        for i, (h, _w, _wi) in enumerate(proj.get("dynamic_cols") or []):
-            if h == header:
-                col = len(UPB_COLUMNS) + i
-                break
+        col = self._texture_live_col(kind)
         n = 0
         for s in proj.get("samples", []):
             for r in s.get("rows", []):
@@ -67966,6 +71050,37 @@ class MainWindow(QMainWindow):
                     n += 1
         return n
 
+    def _rename_texture_option(self, kind, old_name, new_name):
+        """2026-10-24 (M15): renombra (o quita, con new_name="") una textura
+        en lo que guarda su NOMBRE fuera del catálogo y de las celdas: las
+        opciones del menú de su columna en Tabla 1 (las dos copias de
+        `dynamic_cols`) y su casilla en la configuración de entrada, la del
+        proyecto y la ya APLICADA. Así el menú ofrece el nombre nuevo sin
+        pasar por Apply, y Apply no ve ningún cambio que deshacer."""
+        proj = self.projects.get(self.current_project) or {}
+        header = self._texture_col_header(kind)
+        for cols in (proj.get("dynamic_cols"),
+                     getattr(getattr(self, "data_table", None),
+                             "dynamic_cols", None)):
+            for i, (h, w, wi) in enumerate(cols or []):
+                if h != header or not wi or wi[0] != "dropdown":
+                    continue
+                opts = [new_name if o == old_name else o
+                        for o in (wi[1] or []) if new_name or o != old_name]
+                cols[i] = (h, w, (wi[0], opts))
+        _rename_texture_in_rules_and_combos(proj, kind, old_name, new_name)
+        key = _TEXTURE_CFG_KEYS[kind]
+        cfgs = [proj.get("panel2_config")]
+        snap = getattr(self, "_p2_applied", None)
+        if snap and snap[0] == self.current_project:
+            cfgs.append(snap[1])
+        for c in cfgs:
+            d = (c or {}).get(key)
+            if isinstance(d, dict) and old_name in d:
+                v = d.pop(old_name)
+                if new_name:
+                    d[new_name] = v
+
     def _open_texture_editor(self, kind, edit_name=None):
         """Diálogo Add/Edit de una textura custom: nombre + descripción breve +
         marcador (combo con glifo). Al OK: alta o edición en
@@ -67983,8 +71098,9 @@ class MainWindow(QMainWindow):
             if editing is None:
                 return
 
-        kind_label = ("position (core / rim)" if kind == "positions"
-                      else "texture type")
+        kind_label = {"shapes": "grain shape",
+                      "positions": "position (core / rim)",
+                      "types": "texture type"}[kind]
         dlg = QDialog(self)
         dlg.setWindowTitle(("Edit" if editing else "Add") + f" {kind_label}")
         dlg.setStyleSheet(STYLE)
@@ -68017,6 +71133,27 @@ class MainWindow(QMainWindow):
                          if c == editing.get("marker")), 0)
             marker_combo.setCurrentIndex(_idx)
         _mk_row("Symbol:", marker_combo)
+        for _i in range(marker_combo.count()):            # 2026-10-26
+            marker_combo.setItemIcon(
+                _i, _marker_icon(marker_combo.itemData(_i), size=16))
+
+        # 2026-10-26 (Guillermo): la FICHA que la ilustra (dibujo,
+        # interpretación y referencias de Help ▸ Zircon textures). Por omisión,
+        # la de su propio nombre si es de fábrica; una textura con nombre
+        # propio puede tomar la de una de fábrica.
+        card_combo = QComboBox()
+        card_combo.addItem("(none)", "")
+        for _e in DEFAULT_TEXTURE_CATALOG[kind]:
+            if (kind, _e["name"]) in _TEXTURE_ATLAS:
+                card_combo.addItem(_e["name"], _e["name"])
+        self._apply_combo_style(card_combo)
+        _card0 = ((editing.get("card") if "card" in editing
+                   else editing.get("name")) if editing else "")
+        card_combo.setCurrentIndex(max(0, card_combo.findData(_card0 or "")))
+        card_combo.setToolTip("The illustrated card shown by ⓘ and Help ▸ "
+                              "Zircon textures (drawing, interpretation and "
+                              "references).")
+        _mk_row("Card:", card_combo)
 
         hint = QLabel("The symbol is used when a Bivariate/Tectonic plot uses "
                       "texture symbology. Saved with the project.")
@@ -68052,25 +71189,42 @@ class MainWindow(QMainWindow):
         entry = {"name": new_name,
                  "desc": desc_edit.text().strip(),
                  "marker": marker_combo.currentData()}
+        # La ficha: se guarda solo si NO es la de su propio nombre.
+        _cd = card_combo.currentData() or ""
+        if _cd != (new_name if (kind, new_name) in _TEXTURE_ATLAS else ""):
+            entry["card"] = _cd
+        elif editing is not None:
+            editing.pop("card", None)
         renamed_cells = 0
+        renamed = False
+        _boxes = self._texture_boxes(kind)
+        was_on = False
         if editing is not None:
             old_name = editing.get("name")
             if old_name != new_name:
+                renamed = True
+                was_on = bool(_boxes.get(old_name) is not None
+                              and _boxes[old_name].isChecked())
                 renamed_cells = self._rewrite_texture_cells(
                     kind, old_name, new_name)
+                self._rename_texture_option(kind, old_name, new_name)
             editing.update(entry)
         else:
             entries.append(entry)
 
         self._rebuild_texture_checkbox_lists()
-        if editing is None:
-            # Alta: dejarla marcada para que Apply variables la ofrezca ya.
-            cb = (self.position_checkboxes if kind == "positions"
-                  else self.texture_type_checkboxes).get(new_name)
+        # Alta: dejarla marcada para que Apply variables la ofrezca ya.
+        # 2026-10-24 (M15, Guillermo): un RENOMBRE conserva la marca — las
+        # casillas se rehacen por nombre y la del nombre nuevo nacía vacía.
+        if editing is None or was_on:
+            cb = _boxes.get(new_name)
             if cb is not None:
                 cb.setChecked(True)
-        if renamed_cells:
-            self.rebuild_table()
+        if renamed_cells or renamed:
+            # skip_capture: `_rewrite_texture_cells` ya capturó la tabla, y
+            # capturarla OTRA vez (aún con el nombre viejo en pantalla)
+            # deshacía el renombre de las celdas (M15).
+            self.rebuild_table(skip_capture=True)
             self.calc_results_stale = True
         self._mark_dirty()
         msg = (f"Texture '{new_name}' saved."
@@ -68101,10 +71255,16 @@ class MainWindow(QMainWindow):
         cleared = 0
         if n_assigned:
             cleared = self._rewrite_texture_cells(kind, name, "")
+        else:
+            self._capture_table_into_samples()
+        self._rename_texture_option(kind, name, "")          # (M15)
         entries.remove(entry)
         self._rebuild_texture_checkbox_lists()
+        # 2026-10-24 (M15): la tabla se rehace desde el MODELO (ya capturado
+        # arriba) — capturarla otra vez volvía a escribir en las celdas la
+        # textura recién borrada — y su menú ya no la ofrece.
+        self.rebuild_table(skip_capture=True)
         if cleared:
-            self.rebuild_table()
             self.calc_results_stale = True
         self._mark_dirty()
         self.statusBar().showMessage(
@@ -68279,13 +71439,13 @@ class MainWindow(QMainWindow):
         # de tablas es ícono + tooltip, en el idioma del riel — mismo dibujo
         # que su gemelo del riel donde lo hay (Sets, Apply, Import…).
         add_row_btn = QPushButton()
-        self._p5_icon_btn(add_row_btn, "row_add")
+        self._p5_icon_btn(add_row_btn, "row_add", label="Add row")
         add_row_btn.setToolTip("Add row — appends an empty row to the "
                                "selected sample.")
         add_row_btn.clicked.connect(self.add_table_row)
 
         remove_row_btn = QPushButton()
-        self._p5_icon_btn(remove_row_btn, "row_remove")
+        self._p5_icon_btn(remove_row_btn, "row_remove", label="Remove")
         remove_row_btn.setToolTip(
             "Remove rows — deletes the ticked rows (the round checkboxes on "
             "the left). Those checkboxes are shared with Table 2 and also "
@@ -68293,17 +71453,17 @@ class MainWindow(QMainWindow):
         remove_row_btn.clicked.connect(self.remove_table_row)
 
         self.manage_sets_btn = QPushButton()
-        self._p5_icon_btn(self.manage_sets_btn, "sets")
+        self._p5_icon_btn(self.manage_sets_btn, "sets", label="Sets")
         self.manage_sets_btn.clicked.connect(self.manage_sets)
 
         # Botón para purgar datos ocultos en hidden_dynamic (Posición C).
         self.clean_hidden_data_btn = QPushButton()
-        self._p5_icon_btn(self.clean_hidden_data_btn, "clean")
+        self._p5_icon_btn(self.clean_hidden_data_btn, "clean", label="Clean")
         self.clean_hidden_data_btn.clicked.connect(self._show_clean_hidden_data_dialog)
 
         # §(1): fijar el Analysis ID en el encabezado de fila de Tabla 1.
         self._pin_id_t1_chk = QPushButton()
-        self._p5_icon_btn(self._pin_id_t1_chk, "pin")
+        self._p5_icon_btn(self._pin_id_t1_chk, "pin", label="Pin ID")
         self._pin_id_t1_chk.setCheckable(True)
         self._pin_id_t1_chk.setToolTip(
             "Pin ID — keep the Analysis ID in the row header so it stays "
@@ -68324,7 +71484,7 @@ class MainWindow(QMainWindow):
         header_row.addWidget(self._build_t1_gear())
         # §32 (10b): sustraer Tabla 1 a su propia ventana.
         detach_t1_btn = QPushButton()
-        self._p5_icon_btn(detach_t1_btn, "p5_detach")
+        self._p5_icon_btn(detach_t1_btn, "p5_detach", label="Detach")
         detach_t1_btn.setToolTip(
             "Open Table 1 in its own window (close that window to bring the "
             "table back here).")
@@ -68393,6 +71553,7 @@ class MainWindow(QMainWindow):
         self.data_table.horizontalHeader().setFixedHeight(35)
         self.data_table.verticalHeader().setVisible(False)
         self.data_table.verticalHeader().setDefaultSectionSize(14)
+        self._watch_manual_col_widths(self.data_table, "t1")        # M20
         self.data_table.setSelectionMode(QAbstractItemView.SelectionMode.ContiguousSelection)
         # Pin ID vive en la esquina superior izquierda de la tabla (_PinCorner).
         self._pin_corner_t1 = _PinCorner(self.data_table, self._pin_id_t1_chk)
@@ -68695,9 +71856,9 @@ class MainWindow(QMainWindow):
             parts = [f"{' & '.join(k)} ({v})" for k, v in sorted(
                 conf.items(), key=lambda kv: -kv[1])]
             conflict_lbl.setText(
-                f"⚠ {n} analysis(es) fall within the ranges of more than one "
-                f"set: {'; '.join(parts)}. Each goes to the set HIGHER in the "
-                "list — use ↑ ↓ to set the priority, or adjust the ranges.")
+                f"⚠ {n} analysis(es) are captured by the rules of more than "
+                f"one set: {'; '.join(parts)}. Each goes to the set HIGHER in "
+                "the list — use ↑ ↓ to set the priority, or adjust the rules.")
             conflict_lbl.show()
 
         def _on_range(idx):
@@ -68737,8 +71898,17 @@ class MainWindow(QMainWindow):
         def _range_label(g):
             r = g.get("rule")
             if not r:
-                return ("Range…", "Assign this set's grains by a numeric range "
-                        "(additive, within its scope).")
+                return ("Rule…", "Assign this set's grains by a numeric "
+                        "range, by texture, or both (within its scope).")
+            pats = r.get("textures") or []
+            _tlab = [self._rule_pattern_label(p) for p in pats]
+            if not r.get("key"):            # M19: solo texturas
+                txt = "Textures: " + (_tlab[0] if _tlab else "?")
+                if len(_tlab) > 1:
+                    txt += f" (+{len(_tlab) - 1})"
+                return (txt, "This set holds exactly the grains with any of: "
+                        + "; ".join(_tlab) + " (within its scope). Click to "
+                        "edit.")
             disp = _key_disp.get(r.get("key"), r.get("key", "?"))
             _lo, _hi = r.get("min"), r.get("max")
             # Un extremo vacío = sin límite por ese lado (§92).
@@ -68748,6 +71918,12 @@ class MainWindow(QMainWindow):
                 _rng, _in = f"≥ {_lo:g}", f"of {_lo:g} or more"
             else:
                 _rng, _in = f"≤ {_hi:g}", f"of {_hi:g} or less"
+            if pats:                        # M19: rango Y texturas
+                return (f"Range: {_rng} · {disp} + {len(pats)} "
+                        f"texture{'s' if len(pats) != 1 else ''}",
+                        f"This set holds exactly the grains with {disp} {_in} "
+                        "AND any of: " + "; ".join(_tlab) + " (within its "
+                        "scope). Click to edit.")
             return (f"Range: {_rng} · {disp}",
                     f"This set holds exactly the grains with {disp} {_in} "
                     "(within its scope): grains that no longer fit go back to "
@@ -69715,9 +72891,12 @@ class MainWindow(QMainWindow):
         # ventana Textures decide sólo qué ofrece su selector (puede no
         # ofrecer nada todavía).
         if self.textures_check.isChecked():
+            shp_opts = [p for p, cb in self.shape_checkboxes.items() if cb.isChecked()]
             pos_opts = [p for p, cb in self.position_checkboxes.items() if cb.isChecked()]
             tex_opts = [t for t, cb in self.texture_type_checkboxes.items() if cb.isChecked()]
             tex_idx = []
+            # M18 (2026-10-25): la forma del grano, antes de Position.
+            new_cols.append(("Grain shape", 90, ("dropdown", shp_opts))); tex_idx.append(col_idx); col_idx += 1
             new_cols.append(("Position", 80, ("dropdown", pos_opts))); tex_idx.append(col_idx); col_idx += 1
             new_cols.append(("Texture\nType", 100, ("dropdown", tex_opts))); tex_idx.append(col_idx); col_idx += 1
             dynamic_groups.append(("Textures", tex_idx))
@@ -69941,8 +73120,16 @@ class MainWindow(QMainWindow):
         self._p2_mark_applied()
         self._refresh_rail_domains()
         self._apply_t1_column_visibility()     # grupos plegados, ±2se
+        # 2026-10-24 (M20, Guillermo: "el botón del Pin ID está encendido pero
+        # no aparecen las claves"): como rebuild_table — esta tabla se rehace
+        # aquí mismo y su encabezado vertical se quedaba con los NÚMEROS de
+        # fila. Igual con los anchos hechos a mano (arriba se pusieron los de
+        # fábrica).
+        self._apply_pinned_id_header(
+            self.data_table, getattr(self, "_pin_id_t1", False))
+        self._apply_manual_col_widths(self.data_table, "t1")
 
-        if _PERF_DEBUG:                                                       
+        if _PERF_DEBUG:
             print(f"[perf] apply_variables: {(time.perf_counter() - _t0)*1000:.1f} ms")
         _flush_perf()        
 

@@ -6,8 +6,8 @@ authors:
   - family-names: "Espejo Bautista"
     given-names: "Guillermo"
     orcid: "https://orcid.org/0000-0001-9206-5108"
-version: "3.0"
-date-released: "2026-10-19"
+version: "3.1"
+date-released: "2026-10-26"
 license: GPL-3.0-or-later
 repository-code: "https://github.com/zirclock-software/zirclock"
 keywords:
