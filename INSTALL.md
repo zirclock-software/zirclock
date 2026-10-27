@@ -39,7 +39,7 @@ processor.
 ## 2. Download
 
 Go to the [Releases](../../releases) page and download
-**`ZirClock-3.1-windows-setup.exe`**. It will land in your **Downloads**
+**`ZirClock-3.2-windows-setup.exe`**. It will land in your **Downloads**
 folder.
 
 ---
@@ -161,8 +161,8 @@ screen → **About This Mac**.
 
 | That line says | Your download |
 |---|---|
-| **Chip:** Apple M1, M2, M3, M4 or M5 | `ZirClock-3.1-arm64.dmg` |
-| **Processor:** Intel Core i5 / i7 / i9, or Xeon | `ZirClock-3.1-intel.dmg` |
+| **Chip:** Apple M1, M2, M3, M4 or M5 | `ZirClock-3.2-arm64.dmg` |
+| **Processor:** Intel Core i5 / i7 / i9, or Xeon | `ZirClock-3.2-intel.dmg` |
 
 - The **macOS** line must show at least the version in the first table.
 
@@ -193,7 +193,7 @@ of it.
    copies the application. This is the entire installation — Mac applications
    are self-contained bundles, so there is no setup wizard.
 
-3. **Eject the disk image.** In the Finder sidebar, find *ZirClock 3.1* under
+3. **Eject the disk image.** In the Finder sidebar, find *ZirClock 3.2* under
    *Locations* and click the ⏏ symbol next to it. You can then delete the
    `.dmg` from Downloads.
 

@@ -11338,7 +11338,7 @@ ZIRCLOCK_FORMAT_VERSION = 6
 
 # §Ola8: versión visible del SOFTWARE (distinta del format_version del archivo).
 # Se muestra en About ▸ Version & credits (y será útil para el empaquetado, Ola 10).
-ZIRCLOCK_VERSION = "3.1"
+ZIRCLOCK_VERSION = "3.2"
 
 
 def _zirclock_json_default(o):
@@ -11936,6 +11936,44 @@ def _migrate_p5_views_v4(p5cfg):
                 _entry(vk).setdefault("label_pos", {})[key] = pos
 
 
+def _p5_each_content(p5cfg):
+    """La config plana y el contenido guardado de cada perfil por muestra
+    (§148) y de cada versión inactiva (§152): los dicts donde puede vivir
+    una clave de contenido de Panel 5."""
+    if not isinstance(p5cfg, dict):
+        return
+    yield p5cfg
+    for profs in (p5cfg.get("sample_profiles") or {}).values():
+        for prof in (profs or {}).values():
+            c = prof.get("content") if isinstance(prof, dict) else None
+            if isinstance(c, dict):
+                yield c
+    for kind in _P5_VERSION_KINDS:
+        for it in (_versions(p5cfg, kind) or {}).get("items", []):
+            c = (it.get("content") or {}).get("content")
+            if isinstance(c, dict):
+                yield c
+
+
+def _migrate_unassigned_to_hidden_sets(p5cfg):
+    """2026-10-26: "Exclude grains with no set" de los boxplots de Ti y de
+    TDM pasa a ser la casilla "No set" de Settings ▸ 1 · Samples ▸ Sets
+    (decisión de Guillermo: absorberla). Encendida → "" en la lista de sets
+    ocultos de ese diagrama, así se sigue viendo igual. Idempotente (la
+    clave vieja se retira)."""
+    pairs = (("tibox_exclude_unassigned", "tibox_hidden_sets"),
+             ("hf_box_exclude_unassigned", "hf_box_hidden_sets"))
+    for d in list(_p5_each_content(p5cfg)):
+        for old, new in pairs:
+            if old not in d:
+                continue
+            if d.pop(old):
+                lst = [str(x) for x in (d.get(new) or [])]
+                if "" not in lst:
+                    lst.append("")
+                d[new] = lst
+
+
 def _migrate_tibox_sample_views(p5cfg, sample_names):
     """2026-10-24: el boxplot de Ti pasa a tener una vista por muestra en
     "Per sample" (ver _p5_view_key_for). Hasta hoy todas compartían
@@ -12049,6 +12087,8 @@ _SBS_OWN_KEYS = {
     "concordia_single_color": "concordia_sbs_single_color",
     "concordia_set_ramp": "concordia_sbs_set_ramp",     # 2026-09-29
     "concordia_sample_ramp": "concordia_sbs_sample_ramp",   # 2026-10-08
+    # 2026-10-26: qué sets dibuja (Settings ▸ 1 · Samples ▸ Sets).
+    "concordia_hidden_sets": "concordia_sbs_hidden_sets",
 }
 # Los colores propios por muestra (3 · Color by ▸ Sample) de la concordia
 # sencilla viven en concordia_style["sample_styles"]; los del side-by-side,
@@ -12127,7 +12167,8 @@ _KDE_STACK_OWN_KEYS = {k: "kde_stk_" + k[len("kde_"):] for k in (
     "kde_show_mda", "kde_mda_mark", "kde_show_excluded", "kde_show_rug",
     "kde_dots_color_by", "kde_dots_ramp", "kde_dots_set_ramp",
     "kde_dots_sample_ramp", "kde_dots_single_color", "kde_dots_size",
-    "kde_dots_alpha", "kde_hidden_samples")}
+    "kde_dots_alpha", "kde_hidden_samples",
+    "kde_hidden_sets")}                  # 2026-10-26: su lista de sets
 # Lo que un cuerpo de Stacked o de matriz NO escribe de vuelta: eligen el
 # diagrama, el modo y la muestra del KDE (que ahí ni se ven).
 _KDE_VIEW_SKIP = frozenset({"kde_mode", "kde_diagram", "kde_sample"})
@@ -13036,6 +13077,7 @@ def _restore_project(d, file_version=None):
         _migrate_sbs_own_content(proj["panel5_config"])
         _ensure_kde_stack_own(proj["panel5_config"])     # paso 8
         _purge_legacy_text_edits(proj["panel5_config"])
+        _migrate_unassigned_to_hidden_sets(proj["panel5_config"])
         _migrate_tibox_sample_views(
             proj["panel5_config"],
             [s.get("name") for s in (d.get("samples") or [])])
@@ -19789,10 +19831,10 @@ class MainWindow(QMainWindow):
                       "biv_show_excluded"),
         "me_style": ("me_mode", "me_sample"),
         "tibox_style": ("tibox_primary", "tibox_sample", "tibox_use_sets",
-                        "tibox_exclude_unassigned", "tibox_show_excluded"),
+                        "tibox_show_excluded"),
         "hf_style": ("hf_mode", "hf_sample", "hf_show_excluded",
                      "hf_box_mode", "hf_box_tdm_kind",
-                     "hf_box_exclude_unassigned", "hf_box_show_excluded",
+                     "hf_box_show_excluded",
                      "hf_tdm_kind"),
         "tect_style": ("tect_mode", "tect_sample", "tect_show_excluded"),
     }
@@ -29172,7 +29214,7 @@ class MainWindow(QMainWindow):
         order = []        # orden de aparición de grupos
         n_grains = 0
         n_skipped = 0
-        for entry in (self.calc_results or []):
+        for entry in self._p5_rows("me_hidden_sets"):
             if entry.get("invalid_reason"):
                 continue    # §23: fila en cuarentena (2026-09-29: se escapaba)
             sn = entry["sample_name"]
@@ -29591,6 +29633,11 @@ class MainWindow(QMainWindow):
             self._sync_persample_grouping(_me_rb_per, _me_sample_combo)
         _me_rb_per.toggled.connect(lambda _c: _sync_me_combo())
         _sync_me_combo()
+        # 2026-10-26: qué sets se dibujan (vale en los dos modos).
+        _me_spk = self._add_set_picker(
+            grp_l, cfg, "me_hidden_sets", "me",
+            ([_me_sample_combo.currentText()]
+             if _me_rb_per.isChecked() else _me_active))
         outer.addWidget(grp_sub)
 
         # ── 2 · Pattern ──────────────────────────────────────────────────────
@@ -30019,6 +30066,8 @@ class MainWindow(QMainWindow):
         def _commit():
             cfg["me_mode"] = 0 if _me_grp.checkedId() == 0 else 1
             _me_pk["commit"]()
+            if _me_spk is not None:
+                _me_spk["commit"]()
             if _me_active:
                 cfg["me_sample"] = _me_sample_combo.currentText()
             cfg["me_show_nodes"] = _me_nodes_chk.isChecked()
@@ -30084,7 +30133,8 @@ class MainWindow(QMainWindow):
             self._p5s_bind_scope(dlg, _me_grp, 0, _me_sample_combo)
         self._p5_show_settings(
             dlg, bb, _commit, "me_style", "Multi-element updated.",
-            validate=lambda: _me_pk["validate_now"]() or _validate_me())
+            validate=lambda: (self._p5_validate_all(_me_pk, _me_spk)
+                              or _validate_me()))
 
     def build_panel5(self):
         """
@@ -30828,7 +30878,7 @@ class MainWindow(QMainWindow):
 
         grouped = [
             (sname, list(entries))
-            for sname, entries in groupby(self.calc_results,
+            for sname, entries in groupby(self._p5_rows("hf_hidden_sets"),
                                           key=lambda e: e["sample_name"])
         ]
         for sample_name, entries in grouped:
@@ -31396,7 +31446,7 @@ class MainWindow(QMainWindow):
 
         grouped = [
             (sname, list(entries))
-            for sname, entries in groupby(self.calc_results,
+            for sname, entries in groupby(self._p5_rows("hf_hidden_sets"),
                                           key=lambda e: e["sample_name"])
         ]
         for sample_name, entries in grouped:
@@ -31871,7 +31921,7 @@ class MainWindow(QMainWindow):
 
         grouped = [
             (sname, list(entries))
-            for sname, entries in groupby(self.calc_results,
+            for sname, entries in groupby(self._p5_rows("hf_hidden_sets"),
                                           key=lambda e: e["sample_name"])
         ]
         for sample_name, entries in grouped:
@@ -32015,7 +32065,10 @@ class MainWindow(QMainWindow):
                       else "TDM (single-stage)")
         show_points = bool(cfg.get("hf_box_show_points", True))
         show_excluded = bool(cfg.get("hf_box_show_excluded", False))
-        exclude_unassigned = bool(cfg.get("hf_box_exclude_unassigned", False))
+        # 2026-10-26: los sin set se quitan con la casilla "No set" de
+        # 1 · Samples ▸ Sets (las filas ya llegan filtradas, `_p5_rows`).
+        exclude_unassigned = (self._P5_NO_SET in self._p5_hidden_sets(
+            self._HF_BOX_HIDDEN_SETS))
         # Media aritmética ± σ_pop por caja (espejo del estadístico del tibox):
         # texto debajo de la caja (show_stats) y/o overlay línea+banda (show_mean).
         show_stats = bool(cfg.get("hf_box_show_stats", True))
@@ -32077,7 +32130,7 @@ class MainWindow(QMainWindow):
             order = list(active_order)
         elif mode == 1:
             order = []
-            for entry in (self.calc_results or []):
+            for entry in self._p5_rows(self._HF_BOX_HIDDEN_SETS):
                 if tdm_of(entry) is None:
                     continue
                 if exclude_unassigned and not entry["set_name"]:
@@ -32089,7 +32142,7 @@ class MainWindow(QMainWindow):
                 order = [k for k in order if k] + [""]
         elif mode == 3:
             sets_in_sample = {}
-            for entry in (self.calc_results or []):
+            for entry in self._p5_rows(self._HF_BOX_HIDDEN_SETS):
                 if tdm_of(entry) is None:
                     continue
                 sname = entry["sample_name"]
@@ -32117,7 +32170,7 @@ class MainWindow(QMainWindow):
         # Clasificación: usados (no excluidos) vs U-Pb-excluidos (con TDM).
         used_by = defaultdict(list)    # g -> [(tdm, set), ...]
         upb_by = defaultdict(list)
-        for entry in (self.calc_results or []):
+        for entry in self._p5_rows(self._HF_BOX_HIDDEN_SETS):
             v = tdm_of(entry)
             if v is None:
                 continue
@@ -32943,7 +32996,7 @@ class MainWindow(QMainWindow):
         _hl_ages = []      # edades de los granos encendidos desde Tabla 2
         n_used = n_excluded = n_skipped = 0
 
-        for entry in (self.calc_results or []):
+        for entry in self._p5_rows("kde_hidden_sets"):
             sn = entry["sample_name"]
             if samples_filter is not None and sn not in samples_filter:
                 continue
@@ -33394,7 +33447,7 @@ class MainWindow(QMainWindow):
                           else self._p5_shown_filter("kde_style"))
 
         recs, n_excl, n_nosig = [], 0, 0
-        for entry in (self.calc_results or []):
+        for entry in self._p5_rows("kde_hidden_sets"):
             sn = entry["sample_name"]
             if samples_filter is not None and sn not in samples_filter:
                 continue
@@ -33763,7 +33816,7 @@ class MainWindow(QMainWindow):
         n_excl_by_sample = {name: 0 for name in active_order}
         excl_by_sample = {name: [] for name in active_order}
         _hl_ages = []      # edades de los granos encendidos desde Tabla 2
-        for entry in (self.calc_results or []):
+        for entry in self._p5_rows("kde_hidden_sets", cfg):
             sname = entry["sample_name"]
             if sname not in data_by_sample:
                 continue
@@ -34773,7 +34826,7 @@ class MainWindow(QMainWindow):
         if _shown is not None:
             active_order = [n for n in active_order if n in _shown]
         ages_by_sample = {name: [] for name in active_order}
-        for entry in (self.calc_results or []):
+        for entry in self._p5_rows("kde_hidden_sets"):
             sname = entry["sample_name"]
             if sname not in ages_by_sample:
                 continue
@@ -35005,6 +35058,21 @@ class MainWindow(QMainWindow):
                 _kde_grp_l, cfg, "kde_style", "kde",
                 lambda: _kde_grp.checkedId() in (1, 2, 3),
                 [_kde_grp.idToggled])
+        # 2026-10-26: qué sets se dibujan (el Stacked lleva su lista; el
+        # radial comparte la del KDE y la pone en su sección, más abajo).
+        _kde_spk = None
+        if not _is_rad:
+            try:
+                _kde_m0 = int(cfg.get("kde_mode", 0) or 0)
+            except (TypeError, ValueError):
+                _kde_m0 = 0
+            _kde_s0 = str(cfg.get("kde_sample", "") or "")
+            _kde_spk = self._add_set_picker(
+                _kde_grp_l, cfg, "kde_hidden_sets",
+                "kde_stk" if _kdiag == "stacked" else "kde",
+                ([_kde_s0] if (_kdiag == "kde" and _kde_m0 == 0
+                               and _kde_s0 in _kde_grp_active)
+                 else _kde_grp_active))
         # 2026-09-26: la muestra del radial (el 2º diagrama) — su fila vive
         # en la sección "Radial plot", más abajo.
         _kde_rad_combo = QComboBox()
@@ -35633,6 +35701,10 @@ class MainWindow(QMainWindow):
                 _rad_l, cfg, "kde_style", "kde_radial",
                 lambda: not (_kde_rad_combo.currentData() or ""),
                 [_kde_rad_combo.currentIndexChanged])
+            # (Su muestra no rehace el diálogo → los sets de todas.)
+            _kde_spk = self._add_set_picker(
+                _rad_l, cfg, "kde_hidden_sets", "kde_radial",
+                _kde_grp_active)
         _rsc_row = QHBoxLayout()
         _rsc_row.setSpacing(12)
         _rsc_lbl = QLabel("Scale:")
@@ -36246,6 +36318,8 @@ class MainWindow(QMainWindow):
             cfg["kde_radial_sample"] = _kde_rad_combo.currentData() or ""
             if _kde_pk is not None:
                 _kde_pk["commit"]()
+            if _kde_spk is not None:
+                _kde_spk["commit"]()
             cfg["kde_radial_scale"] = ("linear" if _rb_rlin.isChecked()
                                        else "log")
             cfg["kde_radial_band"] = rad_band_check.isChecked()
@@ -36415,8 +36489,7 @@ class MainWindow(QMainWindow):
             self._p5s_bind_scope(dlg, _kde_grp, 0, _kde_grp_sample_combo)
         self._p5_show_settings(
             dlg, bb, _commit, "kde_style", "Age distribution updated.",
-            validate=(_kde_pk["validate_now"] if _kde_pk is not None
-                      else None))
+            validate=lambda: self._p5_validate_all(_kde_pk, _kde_spk))
 
     # ── Pestaña Ti thermometry (Panel 5) ──────────────────────────────────────
     # §7.8: boxplot de la termometría de Ti-en-zircón. Espejo estricto del modelo
@@ -36574,7 +36647,10 @@ class MainWindow(QMainWindow):
             _use_sets = bool(cfg.get("tibox_use_sets", False))
         show_points = bool(cfg.get("tibox_show_points", True))
         show_excluded = bool(cfg.get("tibox_show_excluded", False))
-        exclude_unassigned = bool(cfg.get("tibox_exclude_unassigned", False))
+        # 2026-10-26: los sin set se quitan con la casilla "No set" de
+        # 1 · Samples ▸ Sets (las filas ya llegan filtradas, `_p5_rows`).
+        _ti_hid = self._p5_hidden_sets("tibox_hidden_sets")
+        exclude_unassigned = self._P5_NO_SET in _ti_hid
         # Pendiente 2 (§16): media aritmética ± σ_pop por caja — espejo del
         # Summary de Ti (Panel 4). Dos representaciones del MISMO estadístico:
         # texto debajo de la caja (show_stats) y/o overlay línea+banda (show_mean).
@@ -36657,7 +36733,7 @@ class MainWindow(QMainWindow):
             order = list(active_order)
         elif mode == 1:
             order = []
-            for entry in (self.calc_results or []):
+            for entry in self._p5_rows("tibox_hidden_sets"):
                 if entry["ti_t_c"] is None:
                     continue
                 if sample_filter is not None and \
@@ -36674,7 +36750,7 @@ class MainWindow(QMainWindow):
             # (sample, set) por muestra activa; dentro de cada muestra, los sets
             # en orden de proyecto (+ desconocidos + "" unassigned al final).
             sets_in_sample = {}
-            for entry in (self.calc_results or []):
+            for entry in self._p5_rows("tibox_hidden_sets"):
                 if entry["ti_t_c"] is None:
                     continue
                 sname = entry["sample_name"]
@@ -36703,7 +36779,7 @@ class MainWindow(QMainWindow):
         used_by = defaultdict(list)     # g -> [(T, set, sigma_2se, sample), ...]
         tiout_by = defaultdict(list)
         upb_by = defaultdict(list)
-        for entry in (self.calc_results or []):
+        for entry in self._p5_rows("tibox_hidden_sets"):
             t = entry["ti_t_c"]
             if t is None:
                 continue
@@ -36746,11 +36822,12 @@ class MainWindow(QMainWindow):
                         if not any(e["ti_t_c"] is not None
                                    for e in (self.calc_results or []))
                         else f"No Ti temperatures in {_who}.")
-            elif exclude_unassigned and not any(e["set_name"]
-                                                for e in _shown):
-                _why = (f"The {len(_shown)} Ti temperatures of {_who} have no "
-                        "set,\nand 'Exclude grains with no set' is on "
-                        "(Settings ▸ 1 · Samples & boxes).")
+            elif all((e.get("set_name") or "").strip() in _ti_hid
+                     for e in _shown):
+                # 2026-10-26: la causa puede ser cualquier set oculto.
+                _why = (f"The {len(_shown)} Ti temperatures of {_who} are "
+                        "in sets this diagram hides\n(Settings ▸ 1 · "
+                        "Samples & boxes ▸ Sets).")
             else:
                 _why = (f"All Ti temperatures of {_who} are Ti outliers or "
                         "excluded.\nTick 'Show excluded grains' in "
@@ -37185,7 +37262,6 @@ class MainWindow(QMainWindow):
         cfg = proj["panel5_config"]
         show_points_i = cfg.get("tibox_show_points", True)
         show_excl_i = cfg.get("tibox_show_excluded", False)
-        excl_unassigned_i = cfg.get("tibox_exclude_unassigned", False)
         show_stats_i = cfg.get("tibox_show_stats", True)
         show_mean_i = cfg.get("tibox_show_mean", False)
         # §39 Stage 5: agrupación (retrocompat: derivar del viejo tibox_mode).
@@ -37278,15 +37354,13 @@ class MainWindow(QMainWindow):
             "Off: one box per sample / per pooled group.")
         sets_check.setChecked(bool(_use_sets_i))
         grp_l.addWidget(sets_check)
-        unassigned_check = QCheckBox("Exclude grains with no set")
-        unassigned_check.setStyleSheet("QCheckBox { font-size: 12px; }")
-        unassigned_check.setToolTip(
-            "Off (default): grains with no set are included — as the "
-            "'(unassigned)' box in By set, and as grey points in Per sample / "
-            "Combined.\nOn: those grains are dropped from every box, point and "
-            "mode.")
-        unassigned_check.setChecked(bool(excl_unassigned_i))
-        grp_l.addWidget(unassigned_check)
+        # 2026-10-26: qué sets se dibujan. Su casilla "No set" es la que
+        # antes era "Exclude grains with no set" (`tibox_exclude_unassigned`,
+        # migrada en `_migrate_unassigned_to_hidden_sets`).
+        _ti_spk = self._add_set_picker(
+            grp_l, cfg, "tibox_hidden_sets", "tibox",
+            ([_ti_sample_combo.currentText()]
+             if rb_per.isChecked() else _ti_active))
         outer.addWidget(grp_sub)
 
         # ══ 2 · Marker settings (los puntos: un grano cada uno) ══════════════
@@ -37431,7 +37505,9 @@ class MainWindow(QMainWindow):
         def _commit():
             cfg["tibox_show_points"] = points_check.isChecked()
             cfg["tibox_show_excluded"] = excl_check.isChecked()
-            cfg["tibox_exclude_unassigned"] = unassigned_check.isChecked()
+            cfg.pop("tibox_exclude_unassigned", None)    # → tibox_hidden_sets
+            if _ti_spk is not None:
+                _ti_spk["commit"]()
             cfg["tibox_show_stats"] = stats_check.isChecked()
             cfg["tibox_show_mean"] = mean_check.isChecked()
             # §39 Stage 5: agrupación nueva + muestra elegida (Per sample).
@@ -37466,7 +37542,7 @@ class MainWindow(QMainWindow):
         self._p5s_bind_scope(dlg, _ti_grp, 0, _ti_sample_combo)
         self._p5_show_settings(
             dlg, bb, _commit, "tibox_style", "Ti thermometry updated.",
-            validate=_ti_pk["validate_now"])
+            validate=lambda: self._p5_validate_all(_ti_pk, _ti_spk))
 
     # ── Pestaña Bivariate (Panel 5) ────────────────────────────────────────────
     # §17 BIV-1: graficador XY genérico por análisis — cualquier variable del
@@ -39757,7 +39833,7 @@ class MainWindow(QMainWindow):
         tex_present = set()  # categorías de textura presentes en lo dibujado
         _samps = []          # muestras con puntos dibujados (orden de aparición)
         _hl_xy = []          # granos "encendidos" desde Tabla 2 (aro de acento)
-        for entry in (self.calc_results or []):
+        for entry in self._p5_rows("biv_hidden_sets"):
             if entry.get("invalid_reason"):
                 continue    # §23: fila en cuarentena (2026-09-29: se escapaba)
             if mode == 0 and entry["sample_name"] != sample_filter:
@@ -40282,6 +40358,11 @@ class MainWindow(QMainWindow):
             self._sync_persample_grouping(_biv_rb_per, _biv_sample_combo)
         _biv_rb_per.toggled.connect(lambda _c: _sync_biv_combo())
         _sync_biv_combo()
+        # 2026-10-26: qué sets se dibujan (vale en los dos modos).
+        _biv_spk = self._add_set_picker(
+            grp_l, cfg, "biv_hidden_sets", "biv",
+            ([_biv_sample_combo.currentText()]
+             if _biv_rb_per.isChecked() else _biv_active))
         outer.addWidget(grp_sub)
 
         def _indent():
@@ -40894,6 +40975,8 @@ class MainWindow(QMainWindow):
             cfg["biv_show_halpin_trace"] = htr_check.isChecked()  # §7.12 v2b-2
             cfg["biv_mode"] = 1 if _biv_grp.checkedId() == 1 else 0   # punto 4
             _biv_pk["commit"]()
+            if _biv_spk is not None:
+                _biv_spk["commit"]()
             if _biv_active:
                 cfg["biv_sample"] = _biv_sample_combo.currentText()
             cfg["biv_stack_on"] = stk_check.isChecked()               # Ola 6 (T6)
@@ -40960,7 +41043,7 @@ class MainWindow(QMainWindow):
             self._p5s_bind_scope(dlg, _biv_grp, 0, _biv_sample_combo)
         self._p5_show_settings(
             dlg, bb, _commit, "biv_style", "Bivariate updated.",
-            frame_keys=('biv_stack_on',), validate=_biv_pk["validate_now"])
+            frame_keys=('biv_stack_on',), validate=lambda: self._p5_validate_all(_biv_pk, _biv_spk))
 
     # ── Pestaña Tectonic discrimination (Panel 5, §tect) ─────────────────────
     # Diagramas de discriminación tectono-magmática con trazas de zircón
@@ -41458,7 +41541,7 @@ class MainWindow(QMainWindow):
         tex_present = set()
         n_notex = n_skipped = n_excl = 0
         data_xs, data_ys = [], []
-        for entry in (self.calc_results or []):
+        for entry in self._p5_rows("tect_hidden_sets"):
             if entry.get("invalid_reason"):
                 continue    # §23: fila en cuarentena (2026-09-29: se escapaba)
             if mode == 0 and entry["sample_name"] != sample_filter:
@@ -41833,6 +41916,11 @@ class MainWindow(QMainWindow):
             self._sync_persample_grouping(_tect_rb_per, _tect_sample_combo)
         _tect_rb_per.toggled.connect(lambda _c: _sync_tect_combo())
         _sync_tect_combo()
+        # 2026-10-26: qué sets se dibujan (vale en los dos modos).
+        _tect_spk = self._add_set_picker(
+            grp_l, cfg, "tect_hidden_sets", "tect",
+            ([_tect_sample_combo.currentText()]
+             if _tect_rb_per.isChecked() else _tect_active))
         outer.addWidget(grp_sub)
 
         # ══ 2 · Marker settings ══════════════════════════════════════════════
@@ -41913,6 +42001,8 @@ class MainWindow(QMainWindow):
             cfg["tect_show_excluded"] = excl_check.isChecked()
             cfg["tect_mode"] = 1 if _tect_grp.checkedId() == 1 else 0   # punto 4
             _tect_pk["commit"]()
+            if _tect_spk is not None:
+                _tect_spk["commit"]()
             if _tect_active:
                 cfg["tect_sample"] = _tect_sample_combo.currentText()
             cfg["tect_style"] = self._p5_save_style("tect_style", _style_read())  # §79
@@ -41943,7 +42033,7 @@ class MainWindow(QMainWindow):
             self._p5s_bind_scope(dlg, _tect_grp, 0, _tect_sample_combo)
         self._p5_show_settings(
             dlg, bb, _commit, "tect_style", "Tectonic updated.",
-            validate=_tect_pk["validate_now"])
+            validate=lambda: self._p5_validate_all(_tect_pk, _tect_spk))
 
     def _build_concordia_tab(self):
         """
@@ -42503,7 +42593,14 @@ class MainWindow(QMainWindow):
             if group_means == "none" or (group_means == "set"
                                           and set_grouping == "across"):
                 _scope_note += " (the mean uses only these)"
-        _sub_note = " · ".join(x_ for x_ in (_halpin_subtitle, _scope_note)
+        # 2026-10-26 (decisión de Guillermo): con sets ocultos, una media
+        # que JUNTA sets (global o por muestra) se calcula con lo que se ve
+        # — y ya no es la de Results, así que se dice. Agrupando por set no
+        # cambia ninguna: cada set sale entero o no sale.
+        _set_note = self._wmean_hidden_set_note(
+            points, samples_filter, age_source, group_means)
+        _sub_note = " · ".join(x_ for x_ in (_halpin_subtitle, _scope_note,
+                                             _set_note)
                                if x_) or None
         n_drawn = self._build_wmean_bar_plot(
             self._wmean_ax, plot_points, age_label,
@@ -42741,6 +42838,11 @@ class MainWindow(QMainWindow):
                 _wm_rb_per.isChecked() and _wm_allow_per)
         _wm_rb_per.toggled.connect(lambda _c: _sync_wm_grp_combo())
         _sync_wm_grp_combo()
+        # 2026-10-26: qué sets se dibujan (vale en los dos modos).
+        _wm_spk = self._add_set_picker(
+            _wm_grp_l, cfg, "wmean_hidden_sets", "wmean",
+            ([_wm_grp_sample_combo.currentText()]
+             if _wm_rb_per.isChecked() else _wm_grp_active))
         outer.addWidget(_wm_grp_sub)
         outer.addSpacing(6)
 
@@ -43328,6 +43430,8 @@ class MainWindow(QMainWindow):
             cfg["wmean_sort"] = ("ascending"
                                  if order_group.checkedId() == 1 else "table")
             _wm_pk["commit"]()
+            if _wm_spk is not None:
+                _wm_spk["commit"]()
             cfg["wmean_global_layout"] = ("single"
                                           if gl_group.checkedId() == 1
                                           else "separate")  # §13 D-iii-b
@@ -43380,10 +43484,49 @@ class MainWindow(QMainWindow):
             self._p5s_bind_scope(dlg, _wm_grp, 0, _wm_grp_sample_combo)
         self._p5_show_settings(
             dlg, button_box, _commit, "wmean_style", "Weighted mean updated.",
-            validate=_wm_pk["validate_now"])
+            validate=lambda: self._p5_validate_all(_wm_pk, _wm_spk))
  
+    def _wmean_hidden_set_note(self, points, samples_filter, age_source,
+                               group_means):
+        """Texto del subtítulo si los sets ocultos (Settings ▸ 1 · Samples ▸
+        Sets) dejaron una media del gráfico con MENOS análisis que en
+        Results: alguna muestra (o el conjunto, con media global) tiene a la
+        vez granos visibles y granos ocultos que entrarían a su media. None
+        si no (agrupando por set cada set sale entero o no sale)."""
+        cfg = ((self.projects.get(self.current_project) or {})
+               .get("panel5_config") or {})
+        hid = self._p5_hidden_sets("wmean_hidden_sets", cfg)
+        if (not hid or group_means not in ("none", "sample")
+                or not cfg.get("wmean_show_means", True)):
+            return None
+        skip = self._wmean_skip_sets()
+
+        def _bk(sample):
+            return "__all__" if group_means == "none" else sample
+        seen = {_bk(p["sample_name"]) for p in points
+                if not p.get("excluded")
+                and (p.get("set_name") or "") not in skip}
+        for e in (self.calc_results or []):
+            st = (e.get("set_name") or "").strip()
+            if st not in hid or e.get("excluded_from_mean") or st in skip:
+                continue
+            if (samples_filter is not None
+                    and e["sample_name"] not in samples_filter):
+                continue
+            a, s2 = self._select_age_for_wmean(
+                e["ages"], e["best_age_label"], age_source,
+                e["conc_age"], e["conc_2se"])
+            if a is None or s2 is None or a <= 0 or s2 <= 0:
+                continue
+            if _bk(e["sample_name"]) in seen:
+                return ("the mean uses only the shown sets"
+                        if group_means == "none"
+                        else "the means use only the shown sets")
+        return None
+
     def _collect_wmean_data_for_plot(self, samples_filter, age_source,
-                                     sort_mode="table", sort_scope="global"):
+                                     sort_mode="table", sort_scope="global",
+                                     rows_key="wmean_hidden_sets"):
         """
         Recolecta los puntos para el diagrama de barras de weighted mean.
  
@@ -43431,7 +43574,9 @@ class MainWindow(QMainWindow):
         # buckets de _build_wmean_mean_buckets (que re-lee este mismo set).
         _skip_sets = self._wmean_skip_sets()
 
-        for entry in (self.calc_results or []):
+        # 2026-10-26: sin los sets que oculta el diagrama (`rows_key`: el
+        # inset de la Concordia, §6-5, sigue la lista de la Concordia).
+        for entry in self._p5_rows(rows_key):
             if (samples_filter is not None
                     and entry["sample_name"] not in samples_filter):
                 continue
@@ -45288,7 +45433,7 @@ class MainWindow(QMainWindow):
         # set no había forma de saber qué color era cada uno). n = usados/total
         # sobre TODAS las concordias, como la vista normal (§13 item 6).
         _set_used, _set_tot = {}, {}
-        for entry in (self.calc_results or []):
+        for entry in self._p5_rows("concordia_hidden_sets", cfg):
             sn = entry.get("sample_name")
             if sn not in sample_names or entry.get("invalid_reason"):
                 continue
@@ -47535,7 +47680,8 @@ class MainWindow(QMainWindow):
             age_source, "Best Age")
         sort_mode = cfg.get("wmean_sort", "table")
         points, wmean_result, _skip = self._collect_wmean_data_for_plot(
-            samples_filter, age_source, sort_mode=sort_mode, sort_scope="within")
+            samples_filter, age_source, sort_mode=sort_mode, sort_scope="within",
+            rows_key="concordia_hidden_sets")
         show_excluded = bool(cfg.get("wmean_show_excluded", False))
         n_excluded = sum(1 for p in points if p.get("excluded"))
         plot_points = points if show_excluded else \
@@ -48334,6 +48480,181 @@ class MainWindow(QMainWindow):
         api["box"] = box
         return api
 
+    # ── Qué SETS dibuja cada diagrama (2026-10-26, pedido de Guillermo) ────
+    # "Generar un gráfico únicamente con esos análisis" (los bordes < 975 Ma
+    # del proyecto SJC). En Settings ▸ 1 · Samples, debajo de la lista de
+    # muestras, una lista "Sets (n of m shown)" con una casilla por set y una
+    # "No set". Decisiones suyas (2026-10-26): POR PESTAÑA, y por eso viaja
+    # con la configuración por muestra (§148) y con las versiones (§152);
+    # vale en los modos por muestra y en los combinados; es PRESENTACIÓN —
+    # Panel 4, Results, Tabla 2 y el export no cambian. Una estadística que
+    # junta varios sets se calcula con lo que se ve, y si es una edad que
+    # también está en Results (las medias del Weighted mean, las edades de
+    # grupo de la leyenda de Concordia) el subtítulo lo dice; si sólo se
+    # escondieron puntos, la figura queda limpia. Se guarda lo DESMARCADO
+    # (un set creado después aparece marcado); "" = los análisis sin set.
+    # Absorbió el "Exclude grains with no set" de los boxplots de Ti y de
+    # TDM; el de TDM lleva lista propia para no cambiar los otros diagramas
+    # de Hf al migrar (`_migrate_unassigned_to_hidden_sets`).
+    _P5_HIDDEN_SET_KEYS = {
+        "concordia_style": "concordia_hidden_sets",
+        "wmean_style": "wmean_hidden_sets",
+        "kde_style": "kde_hidden_sets",
+        "biv_style": "biv_hidden_sets",
+        "me_style": "me_hidden_sets",
+        "tibox_style": "tibox_hidden_sets",
+        "hf_style": "hf_hidden_sets",
+        "tect_style": "tect_hidden_sets",
+    }
+    _HF_BOX_HIDDEN_SETS = "hf_box_hidden_sets"
+    _P5_NO_SET = ""          # la casilla "No set" (set_name vacío)
+    # Cambiar qué sets se ven cambia QUÉ datos se dibujan → re-encuadre.
+    for _k_, _v_ in _P5_HIDDEN_SET_KEYS.items():
+        _P5_DATA_SCOPE_KEYS[_k_] = (tuple(_P5_DATA_SCOPE_KEYS.get(_k_, ()))
+                                    + (_v_,))
+    _P5_DATA_SCOPE_KEYS["concordia_style"] += ("concordia_sbs_hidden_sets",)
+    _P5_DATA_SCOPE_KEYS["kde_style"] += ("kde_stk_hidden_sets",)
+    _P5_DATA_SCOPE_KEYS["hf_style"] += ("hf_box_hidden_sets",)
+    del _k_, _v_
+
+    def _p5_hidden_sets(self, key, cfg=None):
+        """Sets que oculta la clave `key` de esa config ("" = los análisis
+        sin set). Vacío = se dibuja todo, como siempre. `cfg`: una vista
+        (side-by-side, Stacked) o None = panel5_config."""
+        if cfg is None:
+            cfg = ((self.projects.get(self.current_project) or {})
+                   .get("panel5_config") or {})
+        v = cfg.get(key) or []
+        if not isinstance(v, (list, tuple, set)):
+            return set()
+        return {str(x).strip() for x in v}
+
+    def _p5_rows(self, key, cfg=None):
+        """`calc_results` sin los análisis de los sets que oculta `key`. Lo
+        recorren los builders de Panel 5 en lugar del modelo entero; sin
+        sets ocultos devuelve el MISMO modelo (cero costo)."""
+        rows = self.calc_results or []
+        hid = self._p5_hidden_sets(key, cfg)
+        if not hid:
+            return rows
+        return [e for e in rows
+                if (e.get("set_name") or "").strip() not in hid]
+
+    def _add_set_picker(self, layout, cfg, key, ns, samples=None):
+        """Lista plegable "Sets (n of m shown)" con Select all / Deselect all,
+        una casilla por set y una "No set". `samples`: las muestras que el
+        diagrama puede dibujar ahora (se listan los sets cuyo alcance toca
+        alguna; None = todos). Devuelve el api (commit, validate_now) o None
+        si el proyecto no tiene sets y la clave no esconde nada."""
+        proj = self.projects.get(self.current_project) or {}
+        hidden0 = [str(h).strip() for h in (cfg.get(key) or [])]
+        groups = proj.get("sets") or []
+        if samples is not None:
+            samples = [s for s in samples if s]
+        names = [g.get("name") for g in groups if g.get("name") and (
+            not samples or any(self._set_applies_to(g, s) for s in samples))]
+        if not groups and not hidden0:
+            return None
+        sec, ct = self._make_collapsible_section(
+            "Sets", expanded=False, accent=False,
+            remember=f"{ns}::shown-sets")
+        lay = QVBoxLayout(ct)
+        lay.setContentsMargins(6, 2, 0, 2)
+        lay.setSpacing(4)
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        b_all = QPushButton("Select all")
+        b_none = QPushButton("Deselect all")
+        for b in (b_all, b_none):
+            b.setObjectName("smallBtn")
+            row.addWidget(b)
+        row.addStretch()
+        lay.addLayout(row)
+        boxes = {}
+        for n, txt in [(n, n) for n in names] + [(self._P5_NO_SET, "No set")]:
+            c = QCheckBox(txt)
+            c.setStyleSheet("QCheckBox { font-size: 12px; }")
+            c.setChecked(n not in hidden0)
+            c.setObjectName("shownSetChk")
+            if n == self._P5_NO_SET:
+                c.setToolTip("The analyses that are in no set.")
+            lay.addWidget(c)
+            boxes[n] = c
+        note = QLabel("Select at least one set to show.")
+        note.setWordWrap(True)
+        note.setStyleSheet("color:#c0392b; font-size:11px; "
+                           "background:transparent;")
+        note.hide()
+        lay.addWidget(note)
+
+        def _count(*_):
+            k = sum(1 for c in boxes.values() if c.isChecked())
+            try:
+                sec._collapse_btn.setText(
+                    f"Sets ({k} of {len(boxes)} shown)")
+            except RuntimeError:
+                pass
+            if k:
+                note.hide()
+
+        def _set_all(on):
+            for c in boxes.values():
+                c.setChecked(on)
+        b_all.clicked.connect(lambda: _set_all(True))
+        b_none.clicked.connect(lambda: _set_all(False))
+        for c in boxes.values():
+            c.toggled.connect(_count)
+        _count()
+
+        def read():
+            # Las ocultas que hoy no se listan (otro alcance) se conservan.
+            keep = [h for h in hidden0 if h not in boxes]
+            return keep + [n for n in boxes if not boxes[n].isChecked()]
+
+        def commit():
+            v = read()
+            if v:
+                cfg[key] = v
+            else:
+                cfg.pop(key, None)
+
+        def validate_now():
+            if not any(c.isChecked() for c in boxes.values()):
+                try:
+                    sec._collapse_btn.setChecked(True)   # que se vea el aviso
+                except RuntimeError:
+                    pass
+                note.show()
+                return "Select at least one set to show."
+            note.hide()
+            return None
+        sec.setToolTip(
+            "Which sets this diagram draws. The analyses of an unticked set "
+            "are not plotted at all, and a statistic that pools several sets "
+            "uses only the ticked ones. Calculations and Results do not "
+            "change. Sets you create later appear ticked.")
+        box = QWidget()
+        box.setObjectName("p5SetPickBox")
+        box.setStyleSheet("#p5SetPickBox { background: transparent; }")
+        bl = QVBoxLayout(box)
+        bl.setContentsMargins(0, 2, 0, 4)
+        bl.setSpacing(0)
+        bl.addWidget(sec)
+        layout.addWidget(box)
+        return {"read": read, "commit": commit, "validate_now": validate_now,
+                "boxes": boxes, "box": box}
+
+    @staticmethod
+    def _p5_validate_all(*apis):
+        """El primer aviso de varias listas (muestras, sets); None si todo
+        bien. Las que no existen (None) no cuentan."""
+        for a in apis:
+            if a is not None:
+                m = a["validate_now"]()
+                if m:
+                    return m
+        return None
+
     def _wmean_color_by(self, cfg):
         """"sample" | "set" | "ramp" | "classes" | "single". Sin la clave se
         deduce "set": es lo que se veía SIEMPRE, no había alternativa que
@@ -48703,7 +49024,7 @@ class MainWindow(QMainWindow):
         from itertools import groupby
         grouped = [
             (sname, list(entries))
-            for sname, entries in groupby(self.calc_results,
+            for sname, entries in groupby(self._p5_rows("concordia_hidden_sets"),
                                           key=lambda e: e["sample_name"])
         ]
         UNASSIGNED_KEY = "__Unassigned__"
@@ -49623,6 +49944,13 @@ class MainWindow(QMainWindow):
         _ca_to_legend = False
         _ca_items = []
         _leg_ages = self._concordia_legend_ages(_p5cfg)
+        # 2026-10-26: con sets ocultos, la edad de un grupo que los incluía
+        # se recalcula con lo que se ve (y el gráfico lo dice); la de un
+        # grupo que no se ve sale de la leyenda.
+        _conc_hid = self._p5_hidden_sets("concordia_hidden_sets")
+        _ga_wm, _ga_ca = (self._p5_group_ages_shown(_conc_hid)
+                          if _conc_hid else ({}, {}))
+        _ga_recalc = []
         if (not is_tw) and _leg_ages in ("concordia", "both"):
             from matplotlib.patches import Ellipse as _Ellipse
             # 2026-09-29 (decisión de Guillermo): las edades de concordia de
@@ -49640,6 +49968,13 @@ class MainWindow(QMainWindow):
             for _gk, _d in _cag.items():
                 if self._age_group_id(_gk) in _hidden:
                     continue       # 2026-10-08: este gráfico no la lleva
+                if _conc_hid:
+                    _ov = _ga_ca.get(_gk, "same")
+                    if _ov is None:
+                        continue   # 2026-10-26: ninguno de sus granos se ve
+                    if _ov != "same":
+                        _d = _ov
+                        _ga_recalc.append(_gk)
                 _nm = self._group_age_name(_gk, samples_filter, _cgrp,
                                            sample_color_map, _p5cfg)
                 if _nm is None:
@@ -49751,8 +50086,10 @@ class MainWindow(QMainWindow):
             # así la figura nunca discrepa del resumen ni del export).
             _leg_show = bool(self._p5_style("concordia_style")
                              .get("legend_show", True))
-            _wm_items = (self._conc_wmean_legend_items(samples_filter,
-                                                       sample_color_map)
+            _wm_items = (self._conc_wmean_legend_items(
+                             samples_filter, sample_color_map,
+                             override=(_ga_wm if _conc_hid else None),
+                             recalc=_ga_recalc)
                          if (_leg_show and _leg_ages in ("wmean", "both"))
                          else [])
             # 2026-09-30 (Guillermo: "lo más minimalista posible"): cada
@@ -49846,6 +50183,11 @@ class MainWindow(QMainWindow):
         # centrado. Se añade ANTES del bg cache → queda en el background estático
         # del blitting (no necesita animarse).
         _halpin_sub, _ = self._halpin_status_summary(samples_filter)
+        # 2026-10-26: una edad de grupo recalculada sin los sets ocultos ya
+        # no es la de Results → se dice, en el mismo recuadro.
+        if _ga_recalc:
+            _halpin_sub = " · ".join(x_ for x_ in (
+                _halpin_sub, "Group ages use only the shown sets") if x_)
         # T10: dentro de un inset no cabe el subtítulo (es una lupa).
         if _halpin_sub and not getattr(self, "_concordia_inset_active", False):
             ax.text(0.015, 0.985, _halpin_sub, transform=ax.transAxes,
@@ -50112,7 +50454,92 @@ class MainWindow(QMainWindow):
             return {str(cfg.get("sample"))}
         return self._p5_shown_filter("concordia_style")
 
-    def _conc_wmean_legend_items(self, samples_filter, sample_color_map):
+    def _p5_group_ages_shown(self, hidden):
+        """Las edades de grupo de Panel 4 vistas con sets OCULTOS en el
+        diagrama (2026-10-26). Devuelve (wm, ca): por cada clave de grupo,
+        None = no se ve ninguno de sus análisis (sale de la leyenda),
+        "same" = se ven todos (la edad de Results, tal cual), o la edad
+        RECALCULADA con los que se ven (mismo dict que guarda Panel 4).
+        Réplica estricta de los filtros de `_calculate_table2_core` (sets sin
+        edad, la regla de los sin set de §108, excluidos) — solo cambia QUÉ
+        análisis entran."""
+        p4 = self._read_panel4_config()
+        src, gm, sg = self._effective_wmean_params(p4)
+        skip = self._wmean_skip_sets(p4)
+        set_samples = self._samples_with_sets()
+        wm_skip_uns = self._wmean_skip_unassigned(
+            p4.get("wmean_group_means",
+                   self._default_panel4_config()["wmean_group_means"]), p4)
+        cg, csg = self._conc_group_params(p4)
+        ca_skip_uns = self._wmean_skip_unassigned(cg, p4)
+        ca_on = bool(p4.get("compute_concordia", False))
+
+        def _vis(e):
+            return (e.get("set_name") or "").strip() not in hidden
+
+        wm_tot, wm_vis, wm_pts = {}, {}, {}
+        ca_tot, ca_vis, ca_pts = {}, {}, {}
+        for e in (self.calc_results or []):
+            if e["ages"] is None:
+                continue
+            st = e.get("set_name") or ""
+            if st in skip:
+                continue
+            nos = not st and e["sample_name"] in set_samples
+            v = _vis(e)
+            if not (wm_skip_uns and nos):
+                a, s2 = self._select_age_for_wmean(
+                    e["ages"], e["best_age_label"], src,
+                    e["conc_age"], e["conc_2se"])
+                if a is not None and s2 is not None:
+                    k = self._wmean_bucket_key(e, gm, sg)
+                    wm_tot[k] = wm_tot.get(k, 0) + 1
+                    if v:
+                        wm_vis[k] = wm_vis.get(k, 0) + 1
+                        if not e["excluded_from_mean"]:
+                            wm_pts.setdefault(k, []).append((a, s2))
+            if (ca_on and not e["excluded_from_mean"]
+                    and not (ca_skip_uns and nos)):
+                k = self._wmean_bucket_key(e, cg, csg)
+                ca_tot[k] = ca_tot.get(k, 0) + 1
+                if v:
+                    ca_vis[k] = ca_vis.get(k, 0) + 1
+                    if (e.get("conc_age") is not None
+                            and e.get("conc_xy") is not None):
+                        ca_pts.setdefault(k, []).append(e["conc_xy"])
+        wm = {}
+        for k, n in wm_tot.items():
+            nv = wm_vis.get(k, 0)
+            if not nv:
+                wm[k] = None
+            elif nv == n:
+                wm[k] = "same"
+            else:
+                wm[k] = (self._compute_weighted_mean(wm_pts[k])
+                         if wm_pts.get(k) else None)
+        ca = {}
+        for k, n in ca_tot.items():
+            nv = ca_vis.get(k, 0)
+            if not nv:
+                ca[k] = None
+            elif nv == n:
+                ca[k] = "same"
+            else:
+                ca[k] = None
+                m = (self._weighted_mean_2d(ca_pts[k])
+                     if ca_pts.get(k) else None)
+                if m is not None:
+                    mx, my, msx, msy, mrho, mn = m
+                    t, t2, smin = self._compute_concordia_age(
+                        mx, my, msx, msy, mrho)
+                    if t is not None:
+                        ca[k] = {"t": t, "t2": t2, "mswd": smin, "n": mn,
+                                 "n_total": max(mn, nv), "mx": mx, "my": my,
+                                 "msx": msx, "msy": msy, "mrho": mrho}
+        return wm, ca
+
+    def _conc_wmean_legend_items(self, samples_filter, sample_color_map,
+                                 override=None, recalc=None):
         """[(nombre, color, coleta)] con los weighted mean TAL CUAL los
         calculó Panel 4 (`calc_wmean_results`: su fuente de edad, su
         agrupación, los sets que eligió calcular y la regla de los sin set
@@ -50136,6 +50563,15 @@ class MainWindow(QMainWindow):
                 continue
             if self._age_group_id(key) in hidden:
                 continue           # 2026-10-08: este gráfico no la lleva
+            if override is not None:
+                # 2026-10-26: sets ocultos (`_p5_group_ages_shown`).
+                ov = override.get(key, "same")
+                if ov is None:
+                    continue
+                if ov != "same":
+                    r = ov
+                    if recalc is not None:
+                        recalc.append(key)
             _nm = self._group_age_name(key, samples_filter, grouping,
                                        sample_color_map, p5)
             if _nm is None:
@@ -50487,9 +50923,19 @@ class MainWindow(QMainWindow):
             "— changing them here does not touch the single Wetherill or "
             "Tera-Wasserburg concordia.", size=11))
         smp_l.addWidget(sbs_box)
+        # 2026-10-26: qué sets se dibujan (el side-by-side lleva su lista).
+        _mode_init = int(cfg.get("mode", 0) or 0)
+        if _is_sbs:
+            _conc_set_smp = list(_sbs_chosen) or _active
+        elif _mode_init in (0, 4):
+            _conc_set_smp = [dlg_sample_combo.currentText()]
+        else:
+            _conc_set_smp = _active
+        _conc_spk = self._add_set_picker(
+            smp_l, cfg, K("concordia_hidden_sets"),
+            "conc_sbs" if _is_sbs else "conc", _conc_set_smp)
         outer.addWidget(smp_sub)
 
-        _mode_init = int(cfg.get("mode", 0) or 0)
         (rb_sbs if _is_sbs
          else (rb_one if _mode_init in (0, 4) else rb_all)).setChecked(True)
 
@@ -51945,6 +52391,8 @@ class MainWindow(QMainWindow):
                     _sel = dlg_sample_combo.currentText().strip()
                     if _sel:
                         cfg["sample"] = _sel
+            if _conc_spk is not None:
+                _conc_spk["commit"]()           # 2026-10-26: qué sets
 
             # ── 2 · Grains ───────────────────────────────────────────────────────
             cfg[K("concordia_show_excluded")] = show_excl_check.isChecked()
@@ -52114,8 +52562,7 @@ class MainWindow(QMainWindow):
         self._p5_show_settings(
             dlg, button_box, _commit, "concordia_style", "Concordia updated.",
             frame_keys=("concordia_sbs_on",),
-            validate=(_conc_pk["validate_now"] if _conc_pk is not None
-                      else None),
+            validate=lambda: self._p5_validate_all(_conc_pk, _conc_spk),
             on_ok=lambda: (self._show_full_concordia_view()
                            if _do_full_view[0] else None))
 
@@ -52168,7 +52615,6 @@ class MainWindow(QMainWindow):
         box_points_initial = cfg.get("hf_box_show_points", True)
         box_stats_initial = cfg.get("hf_box_show_stats", True)
         box_mean_initial = cfg.get("hf_box_show_mean", False)
-        box_unassigned_initial = cfg.get("hf_box_exclude_unassigned", False)
         box_show_excl_initial = cfg.get("hf_box_show_excluded", False)
 
         # §30: pestañas Options | Appearance (`outer` = la pestaña Options,
@@ -52263,6 +52709,15 @@ class MainWindow(QMainWindow):
             _hf_pk = self._add_sample_picker(
                 _hf_grp_l, cfg, "hf_style", "hf",
                 lambda: _hf_rb_all.isChecked(), [_hf_rb_all.toggled])
+        # 2026-10-26: qué sets se dibujan. El boxplot de TDM lleva su lista
+        # (su "No set" es la vieja "Exclude grains with no set").
+        _hf_spk = self._add_set_picker(
+            _hf_grp_l, cfg,
+            self._HF_BOX_HIDDEN_SETS if is_box else "hf_hidden_sets",
+            "hf_box" if is_box else "hf",
+            ([_hf_grp_sample_combo.currentText()]
+             if (not is_box and _hf_rb_per.isChecked())
+             else _hf_grp_active))
         outer.addWidget(_hf_grp_sub)
 
         # ── Error bars ───────────────────────────────────────────────────────
@@ -53011,14 +53466,8 @@ class MainWindow(QMainWindow):
             _bstat_box.addWidget(box_mean_check)
             box_layout.addLayout(_bstat_box)
 
-            # Excluir granos sin set (global, en los 4 modos).
-            box_unassigned_check = QCheckBox("Exclude grains with no set")
-            box_unassigned_check.setStyleSheet("QCheckBox { font-size: 12px; }")
-            box_unassigned_check.setToolTip(
-                "Drop grains not assigned to any set from every box, point and "
-                "count.")
-            box_unassigned_check.setChecked(bool(box_unassigned_initial))
-            box_layout.addWidget(box_unassigned_check)
+            # (2026-10-26: "Exclude grains with no set" es ahora la casilla
+            # "No set" de 1 · Samples ▸ Sets.)
 
             # Show-excluded propio (U-Pb-excluidos = círculo gris hueco).
             box_show_excl_check = QCheckBox(
@@ -53082,6 +53531,8 @@ class MainWindow(QMainWindow):
             if _hf_grp is not None:
                 cfg["hf_mode"] = 1 if _hf_grp.checkedId() == 1 else 0
             _hf_pk["commit"]()
+            if _hf_spk is not None:
+                _hf_spk["commit"]()
             if _hf_grp_sample_combo is not None and _hf_grp_active:
                 cfg["hf_sample"] = _hf_grp_sample_combo.currentText()
             cfg["hf_err_ehf"]      = err_ehf_check.isChecked()
@@ -53173,7 +53624,7 @@ class MainWindow(QMainWindow):
                 cfg["hf_box_show_points"] = box_points_check.isChecked()
                 cfg["hf_box_show_stats"] = box_stats_check.isChecked()
                 cfg["hf_box_show_mean"] = box_mean_check.isChecked()
-                cfg["hf_box_exclude_unassigned"] = box_unassigned_check.isChecked()
+                cfg.pop("hf_box_exclude_unassigned", None)  # → hf_box_hidden_sets
                 cfg["hf_box_show_excluded"] = box_show_excl_check.isChecked()
             cfg["hf_style"] = self._p5_save_style("hf_style", _style_read())   # §79
             # ── Ola 15 · 3 · Color by ────────────────────────────────────────
@@ -53205,7 +53656,7 @@ class MainWindow(QMainWindow):
             self._p5s_bind_scope(dlg, _hf_grp, 0, _hf_grp_sample_combo)
         self._p5_show_settings(
             dlg, button_box, _commit, "hf_style", "Hf updated.",
-            validate=_hf_pk["validate_now"])
+            validate=lambda: self._p5_validate_all(_hf_pk, _hf_spk))
 
 
     def _refresh_concordia_sample_combo(self):
@@ -72060,6 +72511,8 @@ class MainWindow(QMainWindow):
                     _nn for _nn in (rename_log.get(_n, _n)
                                     for _n in _p4_sk["wmean_skip_sets"])
                     if _nn in new_names]
+            # 2026-10-26: y los sets que oculta cada diagrama de Panel 5.
+            self._rename_sets_in_p5_filters(rename_log, new_names)
             # Cruzar 0↔≥1 sets crea/quita la columna transversal "Set"
             # (apply_variables); en otro caso basta rebuild_table.
             structure_changed = (len(old_groups) > 0) != (len(working_copy) > 0)
@@ -72573,6 +73026,28 @@ class MainWindow(QMainWindow):
                 combo.setStyleSheet(base + f" QComboBox {{ color: {g['color']}; }}")
                 return
 
+
+    def _rename_sets_in_p5_filters(self, rename_map, keep_names):
+        """Las listas de sets OCULTOS de Panel 5 (`*_hidden_sets`, en la
+        config plana, en cada perfil por muestra y en cada versión) se
+        llavean por NOMBRE (regla §115): siguen al renombre, y un set borrado
+        sale — si no, un set nuevo con su nombre nacería oculto. "" (los sin
+        set) se queda siempre."""
+        proj = self.projects.get(self.current_project) or {}
+        keep = set(keep_names)
+        for d in list(_p5_each_content(proj.get("panel5_config"))):
+            for k in [k for k in d if str(k).endswith("_hidden_sets")]:
+                if not isinstance(d[k], list):
+                    continue
+                v = []
+                for n in d[k]:
+                    n = rename_map.get(n, n)
+                    if (n == "" or n in keep) and n not in v:
+                        v.append(n)
+                if v:
+                    d[k] = v
+                else:
+                    d.pop(k)
 
     def _apply_set_renames(self, rename_map):
         """

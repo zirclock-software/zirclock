@@ -19,7 +19,7 @@ thermometry and trace-element / REE geochemistry together in one place, so a
 zircon dataset can be reduced, filtered, interpreted and plotted without moving
 between spreadsheets, statistical packages and drawing programs.
 
-> **Status: v3.1.** ZirClock is research software in active development. If
+> **Status: v3.2.** ZirClock is research software in active development. If
 > you find a bug or something behaves unexpectedly, please
 > [open an issue](../../issues).
 >
@@ -37,9 +37,9 @@ system:
 
 | System | Download |
 |---|---|
-| **Windows** 10 / 11 (64-bit) | `ZirClock-3.1-windows-setup.exe` (arriving shortly — until then, `ZirClock-3.0-windows-setup.exe` from the v3.0 release) |
-| **macOS** 14+, Apple Silicon | `ZirClock-3.1-arm64.dmg` |
-| **macOS** 13+, Intel | `ZirClock-3.1-intel.dmg` |
+| **Windows** 10 / 11 (64-bit) | `ZirClock-3.2-windows-setup.exe` (arriving shortly — until then, `ZirClock-3.0-windows-setup.exe` from the v3.0 release) |
+| **macOS** 14+, Apple Silicon | `ZirClock-3.2-arm64.dmg` |
+| **macOS** 13+, Intel | `ZirClock-3.2-intel.dmg` |
 
 Step-by-step instructions for both systems, including the one-time security
 prompts and troubleshooting, are in [INSTALL.md](INSTALL.md).
@@ -155,7 +155,7 @@ comfortable sharing that data.
 A formal citation will be added upon publication. Until then, please cite
 ZirClock as:
 
-> Espejo Bautista, G. (2026). *ZirClock: zircon petrochronology* (version 3.1)
+> Espejo Bautista, G. (2026). *ZirClock: zircon petrochronology* (version 3.2)
 > [Computer software]. https://github.com/zirclock-software/zirclock
 
 GitHub's **Cite this repository** button (from [CITATION.cff](CITATION.cff))
